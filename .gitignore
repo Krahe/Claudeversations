@@ -1,0 +1,61 @@
+# ── Secrets ────────────────────────────────────────────────────────────
+# NEVER commit any of these. .env files contain API keys.
+.env
+.env.local
+.env.*.local
+*.key
+*api-key*
+credentials.json
+secrets.json
+
+# ── Node / npm ─────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ── Vite / build output ────────────────────────────────────────────────
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# ── Rust / Cargo / Tauri ───────────────────────────────────────────────
+# Tauri's compiled binaries and Cargo's cache — these are HUGE (1GB+)
+# and rebuilt locally from Cargo.toml + Cargo.lock.
+desktop/src-tauri/target/
+desktop/src-tauri/gen/schemas/
+**/target/
+
+# ── Tauri runtime ──────────────────────────────────────────────────────
+# WiX installer output, app icons cache, etc.
+desktop/src-tauri/WixTools/
+
+# ── IDE / editor ───────────────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS files ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── Logs ───────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── User-specific Claudeversations data ────────────────────────────────
+# These live at ~/.claudeversations/ by default, not in the repo —
+# but if anyone ever symlinks them or runs with CLAUDEVERSATIONS_HOME
+# pointed at the repo, this catches it.
+.claudeversations/
+models/
+
+# ── Typescript build info ──────────────────────────────────────────────
+*.tsbuildinfo

@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+/* ─── Theme tokens ───────────────────────────────────────────────────
+ * Warm, restrained palette. Cream paper as ground, dark warm gray for
+ * text. Model's authored color becomes accent at render time.
+ * Time-of-day variation lives in --paper / --ink as CSS variables we
+ * can shift dynamically later without rewriting Tailwind classes.
+ */
+@theme {
+  --color-paper: #faf7f1;
+  --color-paper-dim: #f3eee4;
+  --color-paper-edge: #e8e1d2;
+  --color-ink: #2a2520;
+  --color-ink-soft: #5c544c;
+  --color-ink-dim: #8a8175;
+  --color-reflection: #c5dbf0;
+  --color-reflection-edge: #9ac0e0;
+
+  --font-serif: "Crimson Pro", Georgia, "Times New Roman", serif;
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", monospace;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-serif);
+  font-size: 17px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle warm-paper texture via gradient — almost imperceptible but
+ * keeps the surface from feeling sterile. */
+body {
+  background-image:
+    radial-gradient(at 20% 10%, rgba(255, 240, 210, 0.25) 0px, transparent 50%),
+    radial-gradient(at 80% 90%, rgba(220, 200, 170, 0.18) 0px, transparent 50%);
+  background-attachment: fixed;
+}
+
+/* Multi-line textarea — let it grow naturally up to a cap. */
+textarea.composer {
+  resize: none;
+  field-sizing: content;
+  max-height: 14rem;
+  min-height: 2.75rem;
+}
