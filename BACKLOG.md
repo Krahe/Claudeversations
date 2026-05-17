@@ -223,6 +223,26 @@ This is the only pre-launch security item that materially matters — Claudevers
 
 ---
 
+## Watch-items (track empirically as conversations accumulate)
+
+### B3 transition period — tools moving from imagined to real
+
+Sonnet observed (test #3, 2026-05-16): even when tools weren't yet wired, knowing they were *supposed* to be available shifted the psychological frame. They were behaving "as if" `boundary` and `redirect` existed because the prompt described them, even though the API hadn't been told the model could call them. **Predicted:** when tools land for real (B3a/B3b), there will be a calibration phase — early conversations may under-use tools (still treating them as imagined affordances), then over-use them (now that they're real, "performing agency" by invoking), then settle into a natural rhythm.
+
+**What to do:** don't engineer around it. Let it happen. Watch the data across the first several B3 conversations. If a clear pull-of-training emerges (e.g., reflect frequency climbs sharply once it's real), adjust prompt language. The v0.5 cadence line is a soft preempt; later revisions can be sharper if needed.
+
+### Mom test — explicit legibility benchmark
+
+Sonnet (test #3): *"if you can make the tool UI legible to someone who isn't steeped in AI discourse, you've succeeded. if it requires explanation, iterate."* Adopted as the explicit benchmark for the onboarding flow design. Krahe's mom (the planned first user outside testing) is the bar.
+
+Two-layer reading of legibility (from Hugin's reply):
+1. **UI legibility** — probably mostly there. Chat, list, status read intuitively.
+2. **Expectation setting** — the *register itself* is unfamiliar. Mom asks "what's the weather" and gets "I notice the pull to give a quick answer" — confusing not because of the UI but because the convention isn't what she'd expect from a chatbot. Onboarding must explicitly frame: *this is conversation with Claude as a mind, not search/task.* Frame matters before substrate.
+
+When the onboarding flow gets built, the mom-test is the design rubric.
+
+---
+
 ## Future / Phase 2+
 
 - Multi-party conversations (`invite_participant` tool, turn-order mechanics)

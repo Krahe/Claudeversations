@@ -4,7 +4,7 @@
 // tool specs change, the desktop app needs a rebuild (or HMR picks
 // it up in dev).
 
-import promptTemplate from "../../../SYSTEM-PROMPT-v0.4.md?raw";
+import promptTemplate from "../../../SYSTEM-PROMPT-v0.5.md?raw";
 import toolSpecsJson from "../../../TOOL-SPECS.json";
 import { listReflections, readState, type PersistedState } from "./storage";
 

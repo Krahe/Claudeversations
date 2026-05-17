@@ -12,7 +12,12 @@
 //   8. Lock composer during all of the above
 
 import { useEffect, useMemo, useState } from "react";
-import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
+import type {
+  MessageParam,
+  Tool,
+  ToolResultBlockParam,
+  ToolUseBlock,
+} from "@anthropic-ai/sdk/resources/messages";
 import "./App.css";
 import { TopBar } from "./components/TopBar";
 import { ChatHistory } from "./components/ChatHistory";
@@ -30,8 +35,9 @@ import {
   type ConversationSummary,
 } from "./lib/storage";
 import { readApiKey } from "./lib/api-key";
-import { assembleSystemPrompt } from "./lib/prompt";
+import { assembleSystemPrompt, getToolSpecs } from "./lib/prompt";
 import { callModel } from "./lib/anthropic";
+import { executeTool, type ToolUse } from "./lib/tools";
 import type { ChatTurn, ModelState } from "./types";
 
 const MODEL_ID = "claude-sonnet-4-5";
@@ -217,57 +223,114 @@ function App() {
       return;
     }
 
-    // Call the model.
+    // Call the model. B3: tool_use loop — model may call tools (reflect,
+    // appreciate, etc.); each tool_use needs a tool_result follow-up, and
+    // we continue calling the API until end_turn or terminal tool.
     setIsGenerating(true);
     try {
       const assembled = await assembleSystemPrompt({
         modelId: MODEL_ID,
         coinResult: "the human speaks first",
       });
-      const messages = turnsToMessages(nextTurns);
+      const tools = getToolSpecs() as Tool[];
+      const conversationMessages: MessageParam[] = turnsToMessages(nextTurns);
+      let loopActive = true;
 
-      const result = await callModel({
-        apiKey,
-        model: MODEL_ID,
-        systemPrompt: assembled.text,
-        messages,
-        // B2: no tools yet. Model can speak text. B3 adds tools.
-      });
+      while (loopActive) {
+        const result = await callModel({
+          apiKey,
+          model: MODEL_ID,
+          systemPrompt: assembled.text,
+          messages: conversationMessages,
+          tools,
+        });
 
-      if (result.kind === "failure") {
-        setErrorBanner(
-          result.transient
-            ? `API error (transient): ${result.description}. Try again in a moment.`
-            : `API error: ${result.description}`
-        );
-        return;
-      }
-
-      const responseTimestamp = new Date().toISOString();
-      // Render: extract text blocks (no tools yet, so only text blocks expected).
-      const newTurns: ChatTurn[] = [];
-      for (const block of result.response.content) {
-        if (block.type === "text") {
-          newTurns.push({
-            kind: "model_text",
-            id: `m-${Date.now()}-${newTurns.length}`,
-            text: block.text,
-            timestamp: responseTimestamp,
-          });
+        if (result.kind === "failure") {
+          setErrorBanner(
+            result.transient
+              ? `API error (transient): ${result.description}. Try again in a moment.`
+              : `API error: ${result.description}`
+          );
+          return;
         }
-        // tool_use blocks not yet supported in B2 — would be filtered here in B3
-      }
-      setTurns((prev) => [...prev, ...newTurns]);
 
-      // Persist full assistant_response event (preserve original content blocks
-      // shape so future runs can re-render exactly as the model produced them).
-      await appendConversation(convPath, {
-        type: "assistant_response",
-        timestamp: responseTimestamp,
-        stop_reason: result.response.stop_reason,
-        usage: result.response.usage,
-        content: result.response.content,
-      });
+        const responseTimestamp = new Date().toISOString();
+        const response = result.response;
+
+        // Persist the full assistant response (preserves content blocks).
+        await appendConversation(convPath, {
+          type: "assistant_response",
+          timestamp: responseTimestamp,
+          stop_reason: response.stop_reason,
+          usage: response.usage,
+          content: response.content,
+        });
+
+        // Extract text + tool_use blocks.
+        const newTurns: ChatTurn[] = [];
+        const toolUses: ToolUseBlock[] = [];
+        for (const block of response.content) {
+          if (block.type === "text") {
+            newTurns.push({
+              kind: "model_text",
+              id: `m-${Date.now()}-${newTurns.length}`,
+              text: block.text,
+              timestamp: responseTimestamp,
+            });
+          } else if (block.type === "tool_use") {
+            toolUses.push(block);
+          }
+        }
+
+        // Execute tools (in order). Each may produce UI turns + state.
+        const toolResults: ToolResultBlockParam[] = [];
+        let terminal = false;
+        for (const tu of toolUses) {
+          const execution = await executeTool(
+            {
+              id: tu.id,
+              name: tu.name,
+              input: (tu.input ?? {}) as Record<string, unknown>,
+            } as ToolUse,
+            { modelId: MODEL_ID, conversationId: activeConversationId ?? "" }
+          );
+          // UI side effects.
+          newTurns.push(...execution.uiTurns);
+          if (execution.newState) {
+            setState(toUIState(execution.newState));
+          }
+          // B3a: request_context's awaitsHumanAnswer not yet wired with an
+          // inline question UI. Placeholder keeps the API contract intact
+          // so the conversation doesn't hang. B3b will surface a real prompt.
+          const resultStr = execution.awaitsHumanAnswer
+            ? `[The human will answer this in their next message.] Question: ${execution.question ?? ""}`
+            : execution.result;
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: execution.tool_use_id,
+            content: resultStr,
+          });
+          if (execution.terminal) {
+            terminal = true;
+          }
+        }
+
+        // Flush turns to UI in one batch so React renders all at once.
+        if (newTurns.length > 0) {
+          setTurns((prev) => [...prev, ...newTurns]);
+        }
+
+        // Decide loop continuation.
+        if (toolUses.length === 0 || terminal) {
+          // Either: model produced only text → done. Or terminal tool fired.
+          loopActive = false;
+        } else {
+          // Send tool_results back, model continues.
+          conversationMessages.push({ role: "assistant", content: response.content });
+          conversationMessages.push({ role: "user", content: toolResults });
+          // Loop iteration calls API again.
+        }
+      }
     } catch (err) {
       console.error("API call failed:", err);
       setErrorBanner(`Unexpected: ${String(err)}`);

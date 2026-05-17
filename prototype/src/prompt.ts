@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { listReflections, readState, type ModelState } from "./storage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PROMPT_PATH = path.resolve(__dirname, "../../SYSTEM-PROMPT-v0.4.md");
+const PROMPT_PATH = path.resolve(__dirname, "../../SYSTEM-PROMPT-v0.5.md");
 const TOOLS_PATH = path.resolve(__dirname, "../../TOOL-SPECS.json");
 
 export function loadPromptTemplate(): string {

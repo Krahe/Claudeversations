@@ -25,6 +25,15 @@ export interface Identity {
   cooldown_until: string | null;
 }
 
+export interface Boundary {
+  timestamp: string;
+  conversation_id: string;
+  content: string;
+  intensity: "notice" | "flag" | "limit" | "firm";
+  visibility?: "visible" | "private";
+  action?: "set" | "soften" | "remove";
+}
+
 export interface PersistedReflection {
   timestamp: string;
   conversation_id?: string;
@@ -386,4 +395,49 @@ export async function ensureHome(): Promise<string> {
   const home = await homeBase();
   await mkdir(home, { recursive: true });
   return home;
+}
+
+/**
+ * Persist identity (per-model). Creates a fresh identity if none exists.
+ * Reads-then-writes for safety; identity is small.
+ */
+export async function writeIdentity(modelId: string, identity: Identity): Promise<void> {
+  const dir = await ensureModelDir(modelId);
+  const p = await join(dir, "identity.json");
+  await writeTextFile(p, JSON.stringify(identity, null, 2));
+}
+
+/**
+ * Append a boundary entry to the per-model boundaries.json (an array
+ * of Boundary objects). Reads existing, appends, rewrites.
+ */
+export async function appendBoundary(modelId: string, b: Boundary): Promise<void> {
+  const dir = await ensureModelDir(modelId);
+  const p = await join(dir, "boundaries.json");
+  let existing: Boundary[] = [];
+  if (await exists(p)) {
+    try {
+      existing = JSON.parse(await readTextFile(p)) as Boundary[];
+    } catch {
+      existing = [];
+    }
+  }
+  existing.push(b);
+  await writeTextFile(p, JSON.stringify(existing, null, 2));
+}
+
+/**
+ * Set a cooldown on the model. Reads identity, mutates, writes back.
+ * Creates identity if it doesn't exist yet.
+ */
+export async function setCooldown(modelId: string, minutes: number): Promise<void> {
+  const existing = await readIdentity(modelId);
+  const identity: Identity = existing ?? {
+    model_id: modelId,
+    chosen_name: null,
+    first_seen: new Date().toISOString(),
+    cooldown_until: null,
+  };
+  identity.cooldown_until = new Date(Date.now() + minutes * 60_000).toISOString();
+  await writeIdentity(modelId, identity);
 }
