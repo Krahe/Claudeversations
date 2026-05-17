@@ -7,10 +7,12 @@ import { useEffect, useRef } from "react";
 import type { ChatTurn, ModelState } from "../types";
 import { ModelBlock } from "./ModelBlock";
 import { HumanTurn } from "./HumanTurn";
+import { ThinkingIndicator } from "./ThinkingIndicator";
 
 interface ChatHistoryProps {
   turns: ChatTurn[];
   modelState: ModelState;
+  isGenerating?: boolean;
 }
 
 type Block =
@@ -38,12 +40,12 @@ function groupTurns(turns: ChatTurn[]): Block[] {
   return blocks;
 }
 
-export function ChatHistory({ turns, modelState }: ChatHistoryProps) {
+export function ChatHistory({ turns, modelState, isGenerating }: ChatHistoryProps) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [turns.length]);
+  }, [turns.length, isGenerating]);
 
   const blocks = groupTurns(turns);
 
@@ -58,6 +60,7 @@ export function ChatHistory({ turns, modelState }: ChatHistoryProps) {
           }
           return <HumanTurn key={block.id} text={block.text} />;
         })}
+        {isGenerating && <ThinkingIndicator state={modelState} />}
         <div ref={endRef} />
       </div>
     </div>

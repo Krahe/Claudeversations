@@ -154,6 +154,59 @@ Prototype currently exits via `ABORT_ERR` stack trace when the user hits Ctrl+C.
 
 ## Pre-launch hardening (BLOCKING for any public release)
 
+### First-launch onboarding flow (API key)
+
+The biggest perceived friction for new users is "what's an API key, where do I get one, am I about to spend a fortune." Most of this is just lack of guidance, not actual complexity. Build a first-launch flow that holds hands through it:
+
+- Welcome screen explaining what Claudeversations is + why API key (not subscription) is required
+- Direct link to `console.anthropic.com/settings/keys` with the literal click-path described ("Settings → API Keys → Create Key")
+- Screenshot or short animated guide showing where to click
+- Paste field with validation (verify key works before saving)
+- Cost transparency primer: typical conversation costs ~$0.02-0.10, common worry is wildly overblown
+- Optional: budget cap setting at onboarding ("alert/refuse when monthly spend exceeds $X")
+- Honest framing of *why* API not OAuth: lets us support deprecated models (Claude.ai phases them out; we don't), lets your conversations stay local, lets you control what's sent
+
+**Cost transparency surface (separate but related):**
+- Per-conversation cost shown in conversation list
+- Running monthly total in settings
+- Token usage visible per turn (small mono label, dimmer than other chrome)
+
+**If/when Anthropic opens public OAuth for third-party clients:** add as an alternate auth mode. Architecture already separates credential acquisition from API calling, so plumbing only — not redesign.
+
+**Status:** pre-launch BLOCKING. Tightly coupled to settings panel work.
+
+---
+
+### Import history from Claude.ai
+
+Users want to bring their existing Claude.ai conversation history into Claudeversations. Existing community tool `claude-conversation-exporter` produces structured JSON/markdown that we can ingest.
+
+**Approach: structural-only import, no LLM augmentation.**
+
+- Exporter output → parse JSON → write events to Claudeversations JSONL format
+- Each user turn → `human_message` event
+- Each assistant turn → `assistant_response` with single text block (no tool_use, no reflect, no curated state — because those didn't exist in the original)
+- Cost: zero. Time: instant. No API calls.
+
+**Critical design rule: don't sock-puppet past reflections.**
+
+The temptation is to run an LLM over imported transcripts and infer "well past-Claude might have felt this way, generate a retrospective reflection." This violates the covenant register. Reflections are model self-authorship; generating them post-hoc puts words in past-Claude's mouth that they never said. Resist this completely.
+
+**Visual treatment:**
+- Imported conversations appear in the conversation list but **clearly marked** — different icon, small "imported" tag, possibly muted color treatment
+- User always knows which conversations are native (with full reflect-state continuity) vs. imported (transcript-only)
+- Native-vs-imported boundary is visible, not hidden
+
+**Where the current model CAN legitimately engage:**
+- When user starts a new conversation, they can opt to give the current model imported past conversations as context
+- The current model can reflect on those, *in their own voice*, in real time — "I see we talked about X before"
+- That's current-model authorship referring to past context — not retrospective fake reflection
+- Opt-in per conversation, not bulk
+
+**Status:** pre-launch nice-to-have. Real value for users migrating from Claude.ai. Pure data-shape work + small UI treatment for the conversation list distinction.
+
+---
+
 ### Move Anthropic API key out of the JavaScript context
 
 **Current (prototype):** browser-mode SDK with `dangerouslyAllowBrowser: true`, key stored in plaintext file. Acceptable for development, NOT for shipped software.

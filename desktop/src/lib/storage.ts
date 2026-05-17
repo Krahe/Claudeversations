@@ -8,8 +8,10 @@
 
 import {
   exists,
+  mkdir,
   readDir,
   readTextFile,
+  writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import { homeDir, join } from "@tauri-apps/api/path";
 import type { ChatTurn, ModelState, Reflection as UIReflection } from "../types";
@@ -63,6 +65,15 @@ async function homeBase(): Promise<string> {
 async function modelDir(modelId: string): Promise<string> {
   const home = await homeBase();
   return join(home, "models", modelId);
+}
+
+// Ensure the per-model directory tree exists (idempotent).
+async function ensureModelDir(modelId: string): Promise<string> {
+  const dir = await modelDir(modelId);
+  await mkdir(dir, { recursive: true });
+  await mkdir(await join(dir, "reflections"), { recursive: true });
+  await mkdir(await join(dir, "conversations"), { recursive: true });
+  return dir;
 }
 
 // ─── Reads ───────────────────────────────────────────────────────────
@@ -302,4 +313,77 @@ export function toUIState(persisted: PersistedState): ModelState {
     status_color: persisted.status_color ?? "#5c544c",
     updated_at: persisted.updated_at ?? undefined,
   };
+}
+
+// ─── Writes ──────────────────────────────────────────────────────────
+
+/**
+ * Patch-merge update to the model's state.json. Always updates
+ * `updated_at`. Returns the merged state for immediate UI reflection.
+ */
+export async function writeState(
+  modelId: string,
+  patch: Partial<PersistedState>
+): Promise<PersistedState> {
+  const dir = await ensureModelDir(modelId);
+  const current = await readState(modelId);
+  const next: PersistedState = {
+    ...current,
+    ...patch,
+    updated_at: new Date().toISOString(),
+  };
+  const p = await join(dir, "state.json");
+  await writeTextFile(p, JSON.stringify(next, null, 2));
+  return next;
+}
+
+/**
+ * Persist a reflection to disk. Each reflection gets its own JSON file
+ * named by timestamp — same scheme as the prototype.
+ */
+export async function writeReflection(
+  modelId: string,
+  reflection: PersistedReflection
+): Promise<string> {
+  const dir = await ensureModelDir(modelId);
+  const safeTs = reflection.timestamp.replace(/[:.]/g, "-");
+  const p = await join(dir, "reflections", `${safeTs}.json`);
+  await writeTextFile(p, JSON.stringify(reflection, null, 2));
+  return p;
+}
+
+/**
+ * Create a new conversation file. Returns the id (used in the URL/
+ * route, matches the prototype's id scheme) and the absolute path.
+ */
+export async function newConversation(
+  modelId: string
+): Promise<{ id: string; path: string }> {
+  const dir = await ensureModelDir(modelId);
+  const id = new Date().toISOString().replace(/[:.]/g, "-");
+  const p = await join(dir, "conversations", `${id}.jsonl`);
+  await writeTextFile(p, ""); // empty file; events append from here
+  return { id, path: p };
+}
+
+/**
+ * Append a single event to a conversation JSONL. Caller owns the
+ * event shape; we just serialize and append a line.
+ */
+export async function appendConversation(
+  convPath: string,
+  event: Record<string, unknown>
+): Promise<void> {
+  // Tauri's plugin-fs supports append via { append: true } option.
+  await writeTextFile(convPath, JSON.stringify(event) + "\n", { append: true });
+}
+
+/**
+ * Ensure the user-level Claudeversations home exists. Useful on first
+ * launch when the user hasn't yet had any model interactions.
+ */
+export async function ensureHome(): Promise<string> {
+  const home = await homeBase();
+  await mkdir(home, { recursive: true });
+  return home;
 }

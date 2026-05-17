@@ -26,11 +26,15 @@ export function Composer({ onSubmit, disabled }: ComposerProps) {
     <div className="px-6 pb-5 pt-3 border-t border-paper-edge">
       <div className="max-w-2xl mx-auto">
         <div
-          className="rounded-md border border-paper-edge bg-paper-dim/60 px-4 py-2.5 transition-colors focus-within:border-ink-dim"
+          className={`rounded-md border px-4 py-2.5 transition-colors ${
+            disabled
+              ? "border-paper-edge/50 bg-paper-dim/30 opacity-60"
+              : "border-paper-edge bg-paper-dim/60 focus-within:border-ink-dim"
+          }`}
         >
           <textarea
-            className="composer w-full bg-transparent outline-none text-ink placeholder:text-ink-dim/70"
-            placeholder="Your turn. Shift+Enter for newline."
+            className="composer w-full bg-transparent outline-none text-ink placeholder:text-ink-dim/70 disabled:cursor-wait"
+            placeholder={disabled ? "model is thinking…" : "Your turn. Shift+Enter for newline."}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={handleKeyDown}
