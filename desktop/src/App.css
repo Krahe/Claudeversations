@@ -1,44 +1,106 @@
 @import "tailwindcss";
 
-/* ─── Theme tokens ───────────────────────────────────────────────────
- * Warm, restrained palette. Cream paper as ground, dark warm gray for
- * text. Model's authored color becomes accent at render time.
- * Time-of-day variation lives in --paper / --ink as CSS variables we
- * can shift dynamically later without rewriting Tailwind classes.
+/* ─── Theme bundles ──────────────────────────────────────────────────
+ * Each theme is a complete set of CSS custom properties applied via
+ * data-theme on <html>. Components reference only these variables —
+ * never raw colors — so a theme switch is one attribute change away.
+ *
+ * Variables in each bundle:
+ *   --color-paper / paper-dim / paper-edge — surfaces, edges
+ *   --color-ink / ink-soft / ink-dim       — text at three weights
+ *   --color-reflection / reflection-edge   — reflection card
+ *   --wash-strength                        — opacity of model-color wash
+ *                                            (dark themes need higher)
+ *   --body-size                            — base body type size (px)
+ *   --paper-gradient-strength              — opacity of warm-paper
+ *                                            radial gradients
  */
+
 @theme {
-  --color-paper: #faf7f1;
-  --color-paper-dim: #f3eee4;
-  --color-paper-edge: #e8e1d2;
-  --color-ink: #2a2520;
-  --color-ink-soft: #5c544c;
-  --color-ink-dim: #8a8175;
-  --color-reflection: #c5dbf0;
-  --color-reflection-edge: #9ac0e0;
+  --color-paper: var(--paper);
+  --color-paper-dim: var(--paper-dim);
+  --color-paper-edge: var(--paper-edge);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-dim: var(--ink-dim);
+  --color-reflection: var(--reflection);
+  --color-reflection-edge: var(--reflection-edge);
 
   --font-serif: "Crimson Pro", Georgia, "Times New Roman", serif;
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", monospace;
 }
 
-html, body, #root {
+/* Default / Warm Paper theme.
+ * Cream paper as ground, dark warm gray ink. Subtle warm gradients. */
+:root,
+:root[data-theme="warm-paper"] {
+  --paper: #faf7f1;
+  --paper-dim: #f3eee4;
+  --paper-edge: #e8e1d2;
+  --ink: #2a2520;
+  --ink-soft: #5c544c;
+  --ink-dim: #8a8175;
+  --reflection: #c5dbf0;
+  --reflection-edge: #9ac0e0;
+  --panel-tint: rgba(255, 255, 255, 0.4);
+  --panel-tint-deep: rgba(243, 238, 228, 0.25);
+  --wash-strength: 4%;
+  --body-size: 17px;
+  --paper-gradient-strength: 0.25;
+  color-scheme: light;
+}
+
+/* Dark Study theme.
+ * Warm near-black, not cold gray. Cream-tinted text for comfort.
+ * Reflection blue stays recognizable but deeper. Wash alpha bumped
+ * because low-alpha overlays vanish against dark surfaces. */
+:root[data-theme="dark-study"] {
+  --paper: #1a1612;
+  --paper-dim: #221d18;
+  --paper-edge: #322b23;
+  --ink: #e0d8cc;
+  --ink-soft: #a89e90;
+  --ink-dim: #786e62;
+  --reflection: #2d4a6b;
+  --reflection-edge: #547aa3;
+  --panel-tint: rgba(255, 250, 240, 0.025);
+  --panel-tint-deep: rgba(0, 0, 0, 0.18);
+  --wash-strength: 22%;
+  --body-size: 17px;
+  --paper-gradient-strength: 0.08;
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
   background: var(--color-paper);
   color: var(--color-ink);
   font-family: var(--font-serif);
-  font-size: 17px;
+  font-size: var(--body-size);
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color 200ms ease, color 200ms ease;
 }
 
 /* Subtle warm-paper texture via gradient — almost imperceptible but
- * keeps the surface from feeling sterile. */
+ * keeps the surface from feeling sterile. Strength tunes per theme
+ * (lighter in dark, where warm radial gradients read as glow). */
 body {
-  background-image:
-    radial-gradient(at 20% 10%, rgba(255, 240, 210, 0.25) 0px, transparent 50%),
-    radial-gradient(at 80% 90%, rgba(220, 200, 170, 0.18) 0px, transparent 50%);
+  background-image: radial-gradient(
+      at 20% 10%,
+      rgba(255, 240, 210, var(--paper-gradient-strength)) 0px,
+      transparent 50%
+    ),
+    radial-gradient(
+      at 80% 90%,
+      rgba(220, 200, 170, calc(var(--paper-gradient-strength) * 0.7)) 0px,
+      transparent 50%
+    );
   background-attachment: fixed;
 }
 

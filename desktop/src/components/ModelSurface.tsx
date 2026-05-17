@@ -19,7 +19,7 @@ export function ModelSurface({ state, modelId }: ModelSurfaceProps) {
       className="w-72 shrink-0 border-l border-paper-edge flex flex-col items-center px-6 py-10"
       style={{
         background:
-          "linear-gradient(180deg, rgba(255,255,255,0.4) 0%, rgba(243,238,228,0.25) 100%)",
+          "linear-gradient(180deg, var(--panel-tint) 0%, var(--panel-tint-deep) 100%)",
       }}
     >
       <Avatar state={state} size="lg" />

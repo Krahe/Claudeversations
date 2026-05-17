@@ -54,7 +54,7 @@ export function ConversationList({
       className="w-72 shrink-0 border-r border-paper-edge flex flex-col py-6 overflow-y-auto"
       style={{
         background:
-          "linear-gradient(180deg, rgba(255,255,255,0.4) 0%, rgba(243,238,228,0.25) 100%)",
+          "linear-gradient(180deg, var(--panel-tint) 0%, var(--panel-tint-deep) 100%)",
       }}
     >
       <div

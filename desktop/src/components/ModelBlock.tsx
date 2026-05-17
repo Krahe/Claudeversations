@@ -28,10 +28,14 @@ export function ModelBlock({ turns, state }: ModelBlockProps) {
 
       {/* Content column. Wrapped in a subtle wash of the model's
           authored color — present but readable. Reflections nested
-          inside still get their own brighter card on top. */}
+          inside still get their own brighter card on top.
+          Alpha is theme-aware via --wash-strength: low-alpha overlays
+          vanish on dark surfaces, so dark theme bumps it up. */}
       <div
         className="flex flex-col gap-3 min-w-0 px-5 py-4 rounded-lg"
-        style={{ background: `${state.status_color}0a` }}
+        style={{
+          background: `color-mix(in oklch, ${state.status_color} var(--wash-strength), transparent)`,
+        }}
       >
         {turns.map((turn) => {
           if (turn.kind === "model_text") {

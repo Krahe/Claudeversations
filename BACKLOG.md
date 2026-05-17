@@ -109,7 +109,7 @@ The model's `status_color` always overlays whatever theme — themes set the *ro
 - React reads config on launch, applies to `:root`
 - All component styles already use the variables, so swapping is instant
 
-**Status:** v0.4 affordance. Bundle with text-size settings work — same plumbing.
+**Status:** ✅ shipped 2026-05-17. Settings dialog with theme switcher + body-size slider, preferences persist to `~/.claudeversations/preferences.json`. Themes available so far: **Warm Paper** (default), **Dark Study**. CSS-variable architecture means adding more themes is one CSS block each. Other proposed themes (Bold Reader, Minimal Terminal, Library Calm) deferred — easy to add when desired.
 
 ---
 
@@ -124,7 +124,7 @@ User-configurable text size (and potentially line spacing, font choice) under ap
 - Affects body text and reflection text proportionally; chrome (mono labels) stays at fixed size
 - CSS variables (`--body-size`, `--reflect-size`) on `:root` updated from React state — Tailwind classes use those vars
 
-**Status:** v0.4 affordance. Not blocking the avatar/chat work but worth shipping with first GUI release. Cheap to add once a settings panel exists.
+**Status:** ✅ shipped 2026-05-17. Body-size slider (13-22px) in settings dialog with live sample paragraph. Persists to `preferences.json`. Implemented as `--body-size` CSS variable on `:root` — all serif body text scales proportionally; mono chrome (status labels, mono captions) stays at fixed sizes.
 
 ---
 

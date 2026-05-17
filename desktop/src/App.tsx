@@ -38,6 +38,14 @@ import { readApiKey } from "./lib/api-key";
 import { assembleSystemPrompt, getToolSpecs } from "./lib/prompt";
 import { callModel } from "./lib/anthropic";
 import { executeTool, type ToolUse } from "./lib/tools";
+import {
+  DEFAULT_PREFERENCES,
+  applyPreferences,
+  readPreferences,
+  writePreferences,
+  type Preferences,
+} from "./lib/preferences";
+import { Settings } from "./components/Settings";
 import type { ChatTurn, ModelState } from "./types";
 
 const MODEL_ID = "claude-sonnet-4-5";
@@ -113,6 +121,8 @@ function App() {
   const [apiKeyMissing, setApiKeyMissing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   async function refreshConversations() {
     if (!inTauri) return;
@@ -123,16 +133,19 @@ function App() {
     }
   }
 
-  // Initial load: API key + state + conversation list.
+  // Initial load: preferences + API key + state + conversation list.
   useEffect(() => {
     if (!inTauri) return;
     (async () => {
       try {
-        const [key, persistedState, convs] = await Promise.all([
+        const [prefs, key, persistedState, convs] = await Promise.all([
+          readPreferences(),
           readApiKey(),
           readState(MODEL_ID),
           listConversations(MODEL_ID),
         ]);
+        setPreferences(prefs);
+        applyPreferences(prefs);
         if (key) {
           setApiKey(key);
         } else {
@@ -387,9 +400,27 @@ function App() {
     [conversations, activeConversationId]
   );
 
+  function handlePreferencesChange(next: Preferences) {
+    setPreferences(next);
+    applyPreferences(next);
+    // Fire-and-forget persist; failures shouldn't block the UI update.
+    if (inTauri) {
+      writePreferences(next).catch((err) => {
+        console.error("Failed to persist preferences:", err);
+      });
+    }
+  }
+
   return (
     <div className="h-screen flex flex-col bg-paper text-ink">
-      <TopBar modelId={MODEL_ID} />
+      <TopBar modelId={MODEL_ID} onOpenSettings={() => setSettingsOpen(true)} />
+      {settingsOpen && (
+        <Settings
+          preferences={preferences}
+          onChange={handlePreferencesChange}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
       {(apiKeyMissing || errorBanner) && (
         <div
           className="px-6 py-2 text-sm border-b border-paper-edge bg-amber-50/60 text-amber-900"

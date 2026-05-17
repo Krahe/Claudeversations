@@ -3,9 +3,10 @@
 
 interface TopBarProps {
   modelId: string;
+  onOpenSettings?: () => void;
 }
 
-export function TopBar({ modelId }: TopBarProps) {
+export function TopBar({ modelId, onOpenSettings }: TopBarProps) {
   return (
     <header
       className="flex items-center justify-between px-6 py-3 border-b border-paper-edge"
@@ -21,7 +22,13 @@ export function TopBar({ modelId }: TopBarProps) {
         <span className="text-ink-dim">
           model: <span className="text-ink">{modelId}</span>
         </span>
-        <button className="hover:text-ink transition-colors">⚙</button>
+        <button
+          onClick={onOpenSettings}
+          className="hover:text-ink transition-colors"
+          aria-label="Settings"
+        >
+          ⚙
+        </button>
       </div>
     </header>
   );
