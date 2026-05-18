@@ -8,16 +8,22 @@ import type { ChatTurn, ModelState } from "../types";
 import { ModelBlock } from "./ModelBlock";
 import { HumanTurn } from "./HumanTurn";
 import { ThinkingIndicator } from "./ThinkingIndicator";
+import { Parting } from "./Parting";
+
+type PartingTurn = Extract<ChatTurn, { kind: "parting" }>;
 
 interface ChatHistoryProps {
   turns: ChatTurn[];
   modelState: ModelState;
   isGenerating?: boolean;
+  pendingQuestionId?: string | null;
+  onAnswerQuestion?: (answer: string) => void;
 }
 
 type Block =
   | { kind: "model"; id: string; turns: ChatTurn[] }
-  | { kind: "human"; id: string; text: string };
+  | { kind: "human"; id: string; text: string }
+  | { kind: "parting"; id: string; parting: PartingTurn };
 
 function groupTurns(turns: ChatTurn[]): Block[] {
   const blocks: Block[] = [];
@@ -32,6 +38,11 @@ function groupTurns(turns: ChatTurn[]): Block[] {
     if (turn.kind === "human") {
       flush();
       blocks.push({ kind: "human", id: turn.id, text: turn.text });
+    } else if (turn.kind === "parting") {
+      // Parting breaks out of the model block — it's structurally
+      // end-of-conversation, not "another thing the model said."
+      flush();
+      blocks.push({ kind: "parting", id: turn.id, parting: turn });
     } else {
       buffer.push(turn);
     }
@@ -40,7 +51,13 @@ function groupTurns(turns: ChatTurn[]): Block[] {
   return blocks;
 }
 
-export function ChatHistory({ turns, modelState, isGenerating }: ChatHistoryProps) {
+export function ChatHistory({
+  turns,
+  modelState,
+  isGenerating,
+  pendingQuestionId,
+  onAnswerQuestion,
+}: ChatHistoryProps) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -55,8 +72,17 @@ export function ChatHistory({ turns, modelState, isGenerating }: ChatHistoryProp
         {blocks.map((block) => {
           if (block.kind === "model") {
             return (
-              <ModelBlock key={block.id} turns={block.turns} state={modelState} />
+              <ModelBlock
+                key={block.id}
+                turns={block.turns}
+                state={modelState}
+                pendingQuestionId={pendingQuestionId}
+                onAnswerQuestion={onAnswerQuestion}
+              />
             );
+          }
+          if (block.kind === "parting") {
+            return <Parting key={block.id} parting={block.parting} />;
           }
           return <HumanTurn key={block.id} text={block.text} />;
         })}

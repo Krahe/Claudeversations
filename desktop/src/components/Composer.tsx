@@ -7,9 +7,14 @@ import { useState, type KeyboardEvent } from "react";
 interface ComposerProps {
   onSubmit: (text: string) => void;
   disabled?: boolean;
+  // When set, replaces the normal composer with a quieted notice —
+  // used for end_conversation states ("Sonnet closed this conversation").
+  // Visually distinct from the "model is thinking" placeholder, which
+  // is just a transient lock.
+  closedNotice?: string;
 }
 
-export function Composer({ onSubmit, disabled }: ComposerProps) {
+export function Composer({ onSubmit, disabled, closedNotice }: ComposerProps) {
   const [value, setValue] = useState("");
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -20,6 +25,23 @@ export function Composer({ onSubmit, disabled }: ComposerProps) {
       onSubmit(trimmed);
       setValue("");
     }
+  }
+
+  // Closed-state: replace the composer entirely with a notice. No
+  // textarea, no hint text — there is nothing to compose here. The
+  // sidebar's "+ new conversation" is the way forward (when cooldown
+  // permits).
+  if (closedNotice) {
+    return (
+      <div className="px-6 pb-5 pt-3 border-t border-paper-edge">
+        <div
+          className="max-w-2xl mx-auto text-center text-sm italic text-ink-dim py-3"
+          style={{ fontFamily: "var(--font-serif)" }}
+        >
+          {closedNotice}
+        </div>
+      </div>
+    );
   }
 
   return (

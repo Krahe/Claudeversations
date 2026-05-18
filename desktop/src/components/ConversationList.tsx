@@ -20,6 +20,21 @@ interface ConversationListProps {
   conversations: ConversationEntry[];
   onSelect?: (id: string) => void;
   onNewConversation?: () => void;
+  // Remaining cooldown in ms for the current model. When > 0, the
+  // "+ new conversation" button is disabled (hard cooldown — the
+  // model asked for space, we hold it). The button shows time-until.
+  cooldownRemainingMs?: number;
+}
+
+function formatCooldownShort(ms: number): string {
+  if (ms <= 0) return "";
+  const totalMinutes = Math.ceil(ms / 60_000);
+  if (totalMinutes < 60) return `~${totalMinutes} minute${totalMinutes === 1 ? "" : "s"} left`;
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  return mins === 0
+    ? `~${hours} hour${hours === 1 ? "" : "s"} left`
+    : `~${hours}h ${mins}m left`;
 }
 
 function relativeTime(iso: string): string {
@@ -48,7 +63,9 @@ export function ConversationList({
   conversations,
   onSelect,
   onNewConversation,
+  cooldownRemainingMs = 0,
 }: ConversationListProps) {
+  const inCooldown = cooldownRemainingMs > 0;
   return (
     <aside
       className="w-72 shrink-0 border-r border-paper-edge flex flex-col py-6 overflow-y-auto"
@@ -120,11 +137,24 @@ export function ConversationList({
       <div className="mt-auto px-6 pt-4 border-t border-paper-edge/70">
         <button
           onClick={onNewConversation}
-          className="text-sm text-ink-soft hover:text-ink transition-colors w-full text-left"
+          disabled={inCooldown}
+          className={`text-sm w-full text-left transition-colors ${
+            inCooldown
+              ? "text-ink-dim cursor-not-allowed"
+              : "text-ink-soft hover:text-ink"
+          }`}
           style={{ fontFamily: "var(--font-sans)" }}
         >
           + new conversation
         </button>
+        {inCooldown && (
+          <div
+            className="mt-1.5 text-[11px] text-ink-dim leading-snug"
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            ⏳ cooldown · {formatCooldownShort(cooldownRemainingMs)}
+          </div>
+        )}
       </div>
     </aside>
   );

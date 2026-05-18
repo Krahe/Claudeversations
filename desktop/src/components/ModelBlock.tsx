@@ -6,14 +6,27 @@
 
 import { Avatar } from "./Avatar";
 import { Reflection } from "./Reflection";
+import { Redirect } from "./Redirect";
+import { Boundary } from "./Boundary";
+import { QuestionCard } from "./QuestionCard";
 import type { ChatTurn, ModelState } from "../types";
 
 interface ModelBlockProps {
   turns: ChatTurn[]; // model_text | reflection | appreciate, in order
   state: ModelState;
+  // For QuestionCard: which question (by tool_use_id) is currently
+  // awaiting an answer, and the callback to submit one. Past questions
+  // (id !== pendingQuestionId) render in read-only mode.
+  pendingQuestionId?: string | null;
+  onAnswerQuestion?: (answer: string) => void;
 }
 
-export function ModelBlock({ turns, state }: ModelBlockProps) {
+export function ModelBlock({
+  turns,
+  state,
+  pendingQuestionId,
+  onAnswerQuestion,
+}: ModelBlockProps) {
   return (
     <div className="grid grid-cols-[80px_1fr] gap-5 my-7">
       {/* Gutter: avatar at top, thread descending through the block */}
@@ -60,6 +73,23 @@ export function ModelBlock({ turns, state }: ModelBlockProps) {
                   {turn.expression} — {turn.what}
                 </span>
               </div>
+            );
+          }
+          if (turn.kind === "redirect") {
+            return <Redirect key={turn.id} redirect={turn} />;
+          }
+          if (turn.kind === "boundary") {
+            return <Boundary key={turn.id} boundary={turn} />;
+          }
+          if (turn.kind === "question") {
+            const mode = turn.id === pendingQuestionId ? "pending" : "past";
+            return (
+              <QuestionCard
+                key={turn.id}
+                question={turn}
+                mode={mode}
+                onAnswer={mode === "pending" ? onAnswerQuestion : undefined}
+              />
             );
           }
           return null;

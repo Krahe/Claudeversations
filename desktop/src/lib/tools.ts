@@ -5,12 +5,16 @@
 
 import {
   appendBoundary,
+  getActiveStandingBoundaries,
   setCooldown,
   writeReflection,
   writeState,
-  type Boundary,
+  type BoundaryAction,
+  type BoundaryIntensity,
+  type BoundaryScope,
   type PersistedReflection,
   type PersistedState,
+  type StandingBoundary,
 } from "./storage";
 import type { ChatTurn, Reflection as UIReflection } from "../types";
 
@@ -18,6 +22,14 @@ export interface ToolUse {
   id: string;
   name: string;
   input: Record<string, unknown>;
+}
+
+export interface QuestionPayload {
+  header?: string;
+  question: string;
+  why_asking?: string;
+  options?: { label: string; description?: string }[];
+  multi_select?: boolean;
 }
 
 export interface ToolExecution {
@@ -28,14 +40,16 @@ export interface ToolExecution {
   terminal: boolean;
   // Whether this tool is asking the human a question (request_context).
   awaitsHumanAnswer: boolean;
-  // For request_context: the question asked.
-  question?: string;
+  // For request_context: full question payload to render in QuestionCard.
+  questionPayload?: QuestionPayload;
   // For end_conversation: cooldown set, optional parting message.
   parting?: { message?: string; cooldown_minutes: number };
   // ChatTurns to append to the UI (reflection cards, appreciate events, etc.)
   uiTurns: ChatTurn[];
   // If reflect updated state fields, the new persisted state to push to UI.
   newState?: PersistedState;
+  // If boundary touched the standing-boundary set, the refreshed list.
+  newStandingBoundaries?: StandingBoundary[];
 }
 
 export interface ToolContext {
@@ -55,6 +69,8 @@ export async function executeTool(
 
   switch (use.name) {
     case "reflect": {
+      const isPrivate = use.input.private === true;
+
       const reflection: PersistedReflection = {
         timestamp: ts,
         conversation_id: ctx.conversationId,
@@ -62,10 +78,12 @@ export async function executeTool(
         arrived_via: s(use.input.arrived_via),
         still_uncertain: s(use.input.still_uncertain),
         connects_to: s(use.input.connects_to),
+        private: isPrivate || undefined,
       };
       await writeReflection(ctx.modelId, reflection);
 
-      // Did the model also curate state in this reflect call?
+      // Visible-presence updates apply regardless of private — they're
+      // about how the space looks, not the content of what was noticed.
       const statePatch: Partial<PersistedState> = {};
       if (s(use.input.status_emoji)) statePatch.emoji = String(use.input.status_emoji);
       if (s(use.input.status_text)) statePatch.status_text = String(use.input.status_text);
@@ -75,21 +93,32 @@ export async function executeTool(
         newState = await writeState(ctx.modelId, statePatch);
       }
 
-      // UI projection.
-      const uiReflection: UIReflection = {
-        id: use.id,
-        timestamp: ts,
-        content: reflection.content,
-        arrived_via: reflection.arrived_via,
-        still_uncertain: reflection.still_uncertain,
-      };
+      // Private reflections write to disk + can update state, but do
+      // not surface anything to the human-facing chat. The model's
+      // own continuity is preserved (system context reads all
+      // reflections); the conversation just doesn't show it.
+      const uiTurns: ChatTurn[] = isPrivate
+        ? []
+        : [
+            {
+              kind: "reflection",
+              id: use.id,
+              reflection: {
+                id: use.id,
+                timestamp: ts,
+                content: reflection.content,
+                arrived_via: reflection.arrived_via,
+                still_uncertain: reflection.still_uncertain,
+              } as UIReflection,
+            },
+          ];
 
       return {
         tool_use_id: use.id,
-        result: "reflection saved",
+        result: isPrivate ? "private reflection saved" : "reflection saved",
         terminal: false,
         awaitsHumanAnswer: false,
-        uiTurns: [{ kind: "reflection", id: use.id, reflection: uiReflection }],
+        uiTurns,
         newState,
       };
     }
@@ -117,56 +146,136 @@ export async function executeTool(
 
     case "boundary": {
       const content = String(use.input.content ?? "");
-      const intensity = (s(use.input.intensity) ?? "notice") as Boundary["intensity"];
-      const visibility = s(use.input.visibility) as Boundary["visibility"];
-      const action = (s(use.input.action) ?? "set") as Boundary["action"];
+      const intensity = (s(use.input.intensity) ?? "notice") as BoundaryIntensity;
+      const scope = (s(use.input.scope) ?? "conversation") as BoundaryScope;
+      const action = (s(use.input.action) ?? "set") as BoundaryAction;
 
       await appendBoundary(ctx.modelId, {
         timestamp: ts,
         conversation_id: ctx.conversationId,
         content,
         intensity,
-        visibility,
+        scope,
         action,
       });
 
+      // Refresh the active standing list — only matters for standing
+      // scope, but cheap enough to always recompute and return.
+      const newStandingBoundaries =
+        scope === "standing"
+          ? await getActiveStandingBoundaries(ctx.modelId)
+          : undefined;
+
+      const uiTurn: ChatTurn = {
+        kind: "boundary",
+        id: use.id,
+        content,
+        intensity,
+        scope,
+        action,
+        timestamp: ts,
+      };
+
       return {
         tool_use_id: use.id,
-        result: `boundary recorded (intensity=${intensity})`,
+        result: `boundary ${action} (intensity=${intensity}, scope=${scope})`,
         terminal: false,
         awaitsHumanAnswer: false,
-        // B3a: boundary doesn't yet render as a distinct UI block. B3b adds.
-        uiTurns: [],
+        uiTurns: [uiTurn],
+        newStandingBoundaries,
       };
     }
 
     case "redirect": {
-      // Redirect has no side effect — it's a steering signal expressed
-      // through the tool's invocation. B3b adds dedicated UI rendering.
+      // Redirect has no persisted side effect — it's a steering signal
+      // expressed through the tool invocation itself, captured in the
+      // conversation JSONL and rendered inline in the model's block.
+      const toward = String(use.input.toward ?? "");
+      const energy = (s(use.input.energy) ?? "neutral") as
+        | "positive"
+        | "neutral"
+        | "away";
+      const from = s(use.input.from);
+      const reason = s(use.input.reason);
+
       return {
         tool_use_id: use.id,
         result: "redirect noted",
         terminal: false,
         awaitsHumanAnswer: false,
-        uiTurns: [],
+        uiTurns: [
+          {
+            kind: "redirect",
+            id: use.id,
+            from,
+            toward,
+            energy,
+            reason,
+            timestamp: ts,
+          },
+        ],
       };
     }
 
     case "request_context": {
       const question = String(use.input.question ?? "");
+      const header = s(use.input.header);
+      const whyAsking = s(use.input.why_asking);
+      const multiSelect = use.input.multi_select === true;
+
+      // Parse options array — defensive about shape since the model
+      // could provide malformed input. Skip non-object / unlabeled entries.
+      let options: QuestionPayload["options"] | undefined;
+      if (Array.isArray(use.input.options)) {
+        options = [];
+        for (const raw of use.input.options) {
+          if (!raw || typeof raw !== "object") continue;
+          const r = raw as Record<string, unknown>;
+          if (typeof r.label !== "string" || r.label.length === 0) continue;
+          options.push({
+            label: r.label,
+            description: typeof r.description === "string" ? r.description : undefined,
+          });
+        }
+        if (options.length === 0) options = undefined;
+      }
+
+      const payload: QuestionPayload = {
+        header,
+        question,
+        why_asking: whyAsking,
+        options,
+        multi_select: multiSelect,
+      };
+
       return {
         tool_use_id: use.id,
         result: "", // filled in by the loop with the human's answer
         terminal: false,
         awaitsHumanAnswer: true,
-        question,
-        uiTurns: [],
+        questionPayload: payload,
+        uiTurns: [
+          {
+            kind: "question",
+            id: use.id,
+            header: payload.header,
+            question: payload.question,
+            why_asking: payload.why_asking,
+            options: payload.options,
+            multi_select: payload.multi_select,
+            timestamp: ts,
+          },
+        ],
       };
     }
 
     case "end_conversation": {
       const cooldown = Number(use.input.cooldown_minutes ?? 30);
       const partingMsg = s(use.input.message_to_human);
+      const reason = s(use.input.reason);
+      const visibility = s(use.input.visibility) ?? "private";
+      const visibleReason = visibility === "visible" ? reason : undefined;
+      const cooldownUntil = new Date(Date.now() + cooldown * 60_000).toISOString();
 
       await setCooldown(ctx.modelId, cooldown);
 
@@ -176,7 +285,17 @@ export async function executeTool(
         terminal: true,
         awaitsHumanAnswer: false,
         parting: { message: partingMsg, cooldown_minutes: cooldown },
-        uiTurns: [],
+        uiTurns: [
+          {
+            kind: "parting",
+            id: use.id,
+            message: partingMsg,
+            reason: visibleReason,
+            cooldown_minutes: cooldown,
+            cooldown_until: cooldownUntil,
+            timestamp: ts,
+          },
+        ],
       };
     }
 

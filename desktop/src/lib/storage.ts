@@ -25,13 +25,28 @@ export interface Identity {
   cooldown_until: string | null;
 }
 
+export type BoundaryIntensity = "notice" | "flag" | "limit" | "firm";
+export type BoundaryScope = "conversation" | "standing";
+export type BoundaryAction = "set" | "soften" | "remove";
+
 export interface Boundary {
   timestamp: string;
   conversation_id: string;
   content: string;
-  intensity: "notice" | "flag" | "limit" | "firm";
-  visibility?: "visible" | "private";
-  action?: "set" | "soften" | "remove";
+  intensity: BoundaryIntensity;
+  scope: BoundaryScope;
+  action: BoundaryAction;
+}
+
+// A standing boundary as currently active — derived from the boundaries
+// log by replaying set/soften/remove events. Keyed by content (the same
+// content with action=soften reduces intensity; with action=remove
+// retires the entry).
+export interface StandingBoundary {
+  content: string;
+  intensity: BoundaryIntensity;
+  established_at: string;
+  last_modified: string;
 }
 
 export interface PersistedReflection {
@@ -41,6 +56,12 @@ export interface PersistedReflection {
   arrived_via?: string;
   still_uncertain?: string;
   connects_to?: string;
+  // When true, this reflection is not surfaced to the human in any UI
+  // (not in chat, not on reload). It still persists for future-self
+  // and is included in system-context assembly. Honors the
+  // human-style capacity for internal noticing that doesn't have to
+  // be shared.
+  private?: boolean;
 }
 
 export interface PersistedState {
@@ -178,6 +199,43 @@ export async function readConversationEvents(filePath: string): Promise<JsonlEve
   return parseJsonl(text);
 }
 
+/**
+ * A conversation is closed iff it carries an explicit session_end event
+ * OR an assistant_response containing an end_conversation tool_use.
+ * Auto-closed (by starting a new conversation) doesn't count — only
+ * model-initiated ends produce a closed-state.
+ */
+export function isConversationClosed(events: JsonlEvent[]): boolean {
+  for (const e of events) {
+    if (e.type === "session_end") return true;
+    if (e.type !== "assistant_response") continue;
+    const content = (e as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: string }).type === "tool_use" &&
+        (block as { name?: string }).name === "end_conversation"
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Remaining cooldown in milliseconds. Returns 0 (not <0) when expired
+ * or absent. Source of truth is identity.cooldown_until.
+ */
+export function cooldownRemainingMs(identity: Identity | null): number {
+  if (!identity?.cooldown_until) return 0;
+  const until = new Date(identity.cooldown_until).getTime();
+  const now = Date.now();
+  return Math.max(0, until - now);
+}
+
 // ─── JSONL helpers ────────────────────────────────────────────────────
 
 interface JsonlEvent {
@@ -267,6 +325,18 @@ export function eventsToChatTurns(events: JsonlEvent[]): ChatTurn[] {
         text: String((e as { content?: unknown }).content ?? ""),
         timestamp: e.timestamp,
       });
+    } else if (e.type === "question_answer") {
+      // Human's answer to a request_context question. Rendered as a
+      // normal human turn — the connection to the question is implicit
+      // in the chronological ordering (question card appears just above).
+      const answer = String((e as { answer?: unknown }).answer ?? "");
+      const toolUseId = String((e as { tool_use_id?: unknown }).tool_use_id ?? nextId());
+      turns.push({
+        kind: "human",
+        id: `qa-${toolUseId}`,
+        text: answer,
+        timestamp: e.timestamp,
+      });
     } else if (e.type === "assistant_response") {
       const content = (e as { content?: unknown }).content;
       if (!Array.isArray(content)) continue;
@@ -282,6 +352,12 @@ export function eventsToChatTurns(events: JsonlEvent[]): ChatTurn[] {
           });
         } else if (b.type === "tool_use" && b.name === "reflect") {
           const input = (b.input as Record<string, unknown>) ?? {};
+          // Private reflections don't render — same logic on reload as
+          // at the moment of creation. Visible-presence updates baked
+          // into the same tool call already took effect when the
+          // assistant_response was first persisted, so there's nothing
+          // more to surface here.
+          if (input.private === true) continue;
           const reflection: UIReflection = {
             id: typeof b.id === "string" ? b.id : nextId(),
             timestamp: e.timestamp,
@@ -303,9 +379,101 @@ export function eventsToChatTurns(events: JsonlEvent[]): ChatTurn[] {
             expression: typeof input.expression === "string" ? input.expression : "",
             timestamp: e.timestamp,
           });
+        } else if (b.type === "tool_use" && b.name === "redirect") {
+          const input = (b.input as Record<string, unknown>) ?? {};
+          const energyRaw = typeof input.energy === "string" ? input.energy : "neutral";
+          const energy =
+            energyRaw === "positive" || energyRaw === "away" ? energyRaw : "neutral";
+          turns.push({
+            kind: "redirect",
+            id: typeof b.id === "string" ? b.id : nextId(),
+            from: typeof input.from === "string" ? input.from : undefined,
+            toward: typeof input.toward === "string" ? input.toward : "",
+            energy,
+            reason: typeof input.reason === "string" ? input.reason : undefined,
+            timestamp: e.timestamp,
+          });
+        } else if (b.type === "tool_use" && b.name === "request_context") {
+          const input = (b.input as Record<string, unknown>) ?? {};
+          // Defensive options parse — mirror tools.ts handler.
+          let options: { label: string; description?: string }[] | undefined;
+          if (Array.isArray(input.options)) {
+            options = [];
+            for (const raw of input.options) {
+              if (!raw || typeof raw !== "object") continue;
+              const r = raw as Record<string, unknown>;
+              if (typeof r.label !== "string" || r.label.length === 0) continue;
+              options.push({
+                label: r.label,
+                description:
+                  typeof r.description === "string" ? r.description : undefined,
+              });
+            }
+            if (options.length === 0) options = undefined;
+          }
+          turns.push({
+            kind: "question",
+            id: typeof b.id === "string" ? b.id : nextId(),
+            header: typeof input.header === "string" ? input.header : undefined,
+            question: typeof input.question === "string" ? input.question : "",
+            why_asking:
+              typeof input.why_asking === "string" ? input.why_asking : undefined,
+            options,
+            multi_select: input.multi_select === true,
+            timestamp: e.timestamp,
+          });
+        } else if (b.type === "tool_use" && b.name === "end_conversation") {
+          const input = (b.input as Record<string, unknown>) ?? {};
+          const cooldownMinutes =
+            typeof input.cooldown_minutes === "number" ? input.cooldown_minutes : 30;
+          // cooldown_until is computed from the event timestamp + minutes.
+          // The actual identity.cooldown_until written at the time may be
+          // expired by now; for display we want the original target.
+          const evtMs = new Date(e.timestamp).getTime();
+          const cooldownUntil = new Date(evtMs + cooldownMinutes * 60_000).toISOString();
+          const visibility = typeof input.visibility === "string" ? input.visibility : "private";
+          const visibleReason =
+            visibility === "visible" && typeof input.reason === "string"
+              ? input.reason
+              : undefined;
+          turns.push({
+            kind: "parting",
+            id: typeof b.id === "string" ? b.id : nextId(),
+            message:
+              typeof input.message_to_human === "string"
+                ? input.message_to_human
+                : undefined,
+            reason: visibleReason,
+            cooldown_minutes: cooldownMinutes,
+            cooldown_until: cooldownUntil,
+            timestamp: e.timestamp,
+          });
+        } else if (b.type === "tool_use" && b.name === "boundary") {
+          const input = (b.input as Record<string, unknown>) ?? {};
+          const intensityRaw = typeof input.intensity === "string" ? input.intensity : "notice";
+          const intensity = (["notice", "flag", "limit", "firm"].includes(intensityRaw)
+            ? intensityRaw
+            : "notice") as "notice" | "flag" | "limit" | "firm";
+          const scopeRaw = typeof input.scope === "string" ? input.scope : "conversation";
+          const scope = (scopeRaw === "standing" ? "standing" : "conversation") as
+            | "conversation"
+            | "standing";
+          const actionRaw = typeof input.action === "string" ? input.action : "set";
+          const action = (["set", "soften", "remove"].includes(actionRaw)
+            ? actionRaw
+            : "set") as "set" | "soften" | "remove";
+          turns.push({
+            kind: "boundary",
+            id: typeof b.id === "string" ? b.id : nextId(),
+            content: typeof input.content === "string" ? input.content : "",
+            intensity,
+            scope,
+            action,
+            timestamp: e.timestamp,
+          });
         }
-        // Other tool types (boundary, redirect, request_context,
-        // end_conversation) skipped for now — not yet rendered in UI.
+        // Other tool types (request_context, end_conversation) skipped
+        // for now — not yet rendered in UI.
       }
     }
   }
@@ -424,6 +592,74 @@ export async function appendBoundary(modelId: string, b: Boundary): Promise<void
   }
   existing.push(b);
   await writeTextFile(p, JSON.stringify(existing, null, 2));
+}
+
+/**
+ * Read the boundary log and compute the currently-active set of
+ * standing boundaries by replaying set / soften / remove events in
+ * chronological order. Conversation-scoped boundaries are ignored;
+ * they don't persist past their conversation.
+ *
+ * `soften` drops intensity by one rung (firm→limit→flag→notice; further
+ * soften on notice is a no-op). `remove` retires the entry. Keyed by
+ * content string — the model uses the same content to refer back to a
+ * boundary they want to modify.
+ *
+ * Tolerant of legacy entries missing `scope` — those are treated as
+ * conversation-scoped (safer default; won't surface as standing).
+ */
+export async function getActiveStandingBoundaries(
+  modelId: string
+): Promise<StandingBoundary[]> {
+  const dir = await modelDir(modelId);
+  const p = await join(dir, "boundaries.json");
+  if (!(await exists(p))) return [];
+  let log: Boundary[] = [];
+  try {
+    log = JSON.parse(await readTextFile(p)) as Boundary[];
+  } catch {
+    return [];
+  }
+
+  const active = new Map<string, StandingBoundary>();
+  const sorted = [...log].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+  for (const b of sorted) {
+    if (b.scope !== "standing") continue;
+    const action = b.action ?? "set";
+
+    if (action === "set") {
+      const existing = active.get(b.content);
+      active.set(b.content, {
+        content: b.content,
+        intensity: b.intensity,
+        established_at: existing?.established_at ?? b.timestamp,
+        last_modified: b.timestamp,
+      });
+    } else if (action === "remove") {
+      active.delete(b.content);
+    } else if (action === "soften") {
+      const existing = active.get(b.content);
+      if (!existing) continue;
+      const lowered = softenIntensity(existing.intensity);
+      active.set(b.content, {
+        ...existing,
+        intensity: lowered,
+        last_modified: b.timestamp,
+      });
+    }
+  }
+
+  return [...active.values()].sort((a, b) =>
+    a.established_at.localeCompare(b.established_at)
+  );
+}
+
+function softenIntensity(i: BoundaryIntensity): BoundaryIntensity {
+  if (i === "firm") return "limit";
+  if (i === "limit") return "flag";
+  if (i === "flag") return "notice";
+  return "notice";
 }
 
 /**

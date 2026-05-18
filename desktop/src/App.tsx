@@ -11,7 +11,7 @@
 //   7. Render text response, append assistant_response event
 //   8. Lock composer during all of the above
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   MessageParam,
   Tool,
@@ -26,13 +26,19 @@ import { ModelSurface } from "./components/ModelSurface";
 import { ConversationList } from "./components/ConversationList";
 import {
   appendConversation,
+  cooldownRemainingMs,
   eventsToChatTurns,
+  getActiveStandingBoundaries,
+  isConversationClosed,
   listConversations,
   newConversation,
   readConversationEvents,
+  readIdentity,
   readState,
   toUIState,
   type ConversationSummary,
+  type Identity,
+  type StandingBoundary,
 } from "./lib/storage";
 import { readApiKey } from "./lib/api-key";
 import { assembleSystemPrompt, getToolSpecs } from "./lib/prompt";
@@ -50,6 +56,19 @@ import type { ChatTurn, ModelState } from "./types";
 
 const MODEL_ID = "claude-sonnet-4-5";
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+// Friendly cooldown-remaining string. Rounds up to the next minute when
+// < 1 hr (so "47 seconds left" reads as "~1 minute"); hours+minutes
+// past that. Defensive against negative values; callers should already
+// have filtered <=0 but a stray render shouldn't crash.
+function formatCooldown(ms: number): string {
+  if (ms <= 0) return "0m";
+  const totalMinutes = Math.ceil(ms / 60_000);
+  if (totalMinutes < 60) return `~${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  return mins === 0 ? `~${hours}h` : `~${hours}h ${mins}m`;
+}
 
 const FALLBACK_STATE: ModelState = {
   emoji: "🌌",
@@ -123,6 +142,30 @@ function App() {
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [standingBoundaries, setStandingBoundaries] = useState<StandingBoundary[]>([]);
+
+  // Pending question state — when the model calls request_context, we
+  // pause the API loop and wait for the human's answer. The resolver
+  // is held in a ref so the answer-submit handler can fire it.
+  const [pendingQuestionId, setPendingQuestionId] = useState<string | null>(null);
+  const pendingResolver = useRef<((answer: string) => void) | null>(null);
+
+  // End_conversation state. `identity` carries cooldown_until so we can
+  // enforce the model's requested space. `activeConversationClosed`
+  // locks the composer for the currently-viewed conversation when it
+  // was ended (whether just now or in a past session).
+  const [identity, setIdentity] = useState<Identity | null>(null);
+  const [activeConversationClosed, setActiveConversationClosed] = useState(false);
+  // A bare tick that re-renders ~every 30s so cooldown timer text and
+  // button-enable derived from cooldownRemainingMs stay live.
+  const [, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const cooldownMs = cooldownRemainingMs(identity);
+  const inCooldown = cooldownMs > 0;
 
   async function refreshConversations() {
     if (!inTauri) return;
@@ -138,11 +181,13 @@ function App() {
     if (!inTauri) return;
     (async () => {
       try {
-        const [prefs, key, persistedState, convs] = await Promise.all([
+        const [prefs, key, persistedState, convs, standing, ident] = await Promise.all([
           readPreferences(),
           readApiKey(),
           readState(MODEL_ID),
           listConversations(MODEL_ID),
+          getActiveStandingBoundaries(MODEL_ID),
+          readIdentity(MODEL_ID),
         ]);
         setPreferences(prefs);
         applyPreferences(prefs);
@@ -153,6 +198,8 @@ function App() {
         }
         setState(toUIState(persistedState));
         setConversations(convs);
+        setStandingBoundaries(standing);
+        setIdentity(ident);
         if (convs.length > 0 && convs[0]) {
           setActiveConversationId(convs[0].id);
         } else {
@@ -168,6 +215,7 @@ function App() {
   useEffect(() => {
     if (!inTauri || !activeConversationId) {
       setActiveConversationPath(null);
+      setActiveConversationClosed(false);
       return;
     }
     const conv = conversations.find((c) => c.id === activeConversationId);
@@ -177,9 +225,11 @@ function App() {
       try {
         const events = await readConversationEvents(conv.path);
         setTurns(eventsToChatTurns(events));
+        setActiveConversationClosed(isConversationClosed(events));
       } catch (err) {
         console.error(`Failed to load conversation ${conv.id}:`, err);
         setTurns([]);
+        setActiveConversationClosed(false);
       }
     })();
   }, [activeConversationId, conversations]);
@@ -298,6 +348,7 @@ function App() {
         // Execute tools (in order). Each may produce UI turns + state.
         const toolResults: ToolResultBlockParam[] = [];
         let terminal = false;
+        let terminalCooldownMinutes = 30;
         for (const tu of toolUses) {
           const execution = await executeTool(
             {
@@ -312,12 +363,52 @@ function App() {
           if (execution.newState) {
             setState(toUIState(execution.newState));
           }
-          // B3a: request_context's awaitsHumanAnswer not yet wired with an
-          // inline question UI. Placeholder keeps the API contract intact
-          // so the conversation doesn't hang. B3b will surface a real prompt.
-          const resultStr = execution.awaitsHumanAnswer
-            ? `[The human will answer this in their next message.] Question: ${execution.question ?? ""}`
-            : execution.result;
+          if (execution.newStandingBoundaries) {
+            setStandingBoundaries(execution.newStandingBoundaries);
+          }
+
+          let resultStr: string;
+          if (execution.awaitsHumanAnswer) {
+            // Flush the question turn to UI before suspending — the
+            // QuestionCard needs to render so the human can answer.
+            if (newTurns.length > 0) {
+              setTurns((prev) => [...prev, ...newTurns]);
+              newTurns.length = 0;
+            }
+            setPendingQuestionId(execution.tool_use_id);
+            const answer = await new Promise<string>((resolve) => {
+              pendingResolver.current = resolve;
+            });
+            setPendingQuestionId(null);
+            pendingResolver.current = null;
+
+            // Persist the answer to JSONL + show as a human turn so the
+            // conversation flow reads naturally on reload.
+            const answerTs = new Date().toISOString();
+            try {
+              await appendConversation(convPath, {
+                type: "question_answer",
+                timestamp: answerTs,
+                tool_use_id: execution.tool_use_id,
+                answer,
+              });
+            } catch (err) {
+              console.error("Failed to persist question answer:", err);
+            }
+            setTurns((prev) => [
+              ...prev,
+              {
+                kind: "human",
+                id: `qa-${execution.tool_use_id}`,
+                text: answer,
+                timestamp: answerTs,
+              },
+            ]);
+            resultStr = answer;
+          } else {
+            resultStr = execution.result;
+          }
+
           toolResults.push({
             type: "tool_result",
             tool_use_id: execution.tool_use_id,
@@ -325,12 +416,42 @@ function App() {
           });
           if (execution.terminal) {
             terminal = true;
+            if (execution.parting?.cooldown_minutes) {
+              terminalCooldownMinutes = execution.parting.cooldown_minutes;
+            }
           }
         }
 
         // Flush turns to UI in one batch so React renders all at once.
         if (newTurns.length > 0) {
           setTurns((prev) => [...prev, ...newTurns]);
+        }
+
+        // If the model ended the conversation, mark it closed and
+        // refresh the identity so the new cooldown is reflected.
+        if (terminal) {
+          const endTs = new Date().toISOString();
+          const cooldownUntil = new Date(
+            Date.now() + terminalCooldownMinutes * 60_000
+          ).toISOString();
+          try {
+            await appendConversation(convPath, {
+              type: "session_end",
+              timestamp: endTs,
+              cooldown_minutes: terminalCooldownMinutes,
+              cooldown_until: cooldownUntil,
+            });
+          } catch (err) {
+            console.error("Failed to persist session_end:", err);
+          }
+          try {
+            const newIdentity = await readIdentity(MODEL_ID);
+            setIdentity(newIdentity);
+          } catch (err) {
+            console.error("Failed to refresh identity after end:", err);
+          }
+          setActiveConversationClosed(true);
+          refreshConversations();
         }
 
         // Decide loop continuation.
@@ -356,10 +477,23 @@ function App() {
     setActiveConversationId(id);
   }
 
+  function handleAnswerQuestion(answer: string) {
+    if (!pendingResolver.current) return;
+    // Clear the ref BEFORE invoking to guard against double-fire from
+    // a rapid second click.
+    const resolver = pendingResolver.current;
+    pendingResolver.current = null;
+    resolver(answer);
+  }
+
   async function handleNewConversation() {
     if (isGenerating) return;
+    // Hard cooldown: the model said no, the model means no. The UI
+    // disables this button visually too, but defense in depth.
+    if (inCooldown) return;
     setTurns([]);
     setErrorBanner(null);
+    setActiveConversationClosed(false);
     if (!inTauri) {
       setActiveConversationId(null);
       setActiveConversationPath(null);
@@ -437,12 +571,38 @@ function App() {
             conversations={uiConversations}
             onSelect={handleSelectConversation}
             onNewConversation={handleNewConversation}
+            cooldownRemainingMs={cooldownMs}
           />
-          <ChatHistory turns={turns} modelState={state} isGenerating={isGenerating} />
-          <ModelSurface state={state} modelId={MODEL_ID} />
+          <ChatHistory
+            turns={turns}
+            modelState={state}
+            isGenerating={isGenerating && !pendingQuestionId}
+            pendingQuestionId={pendingQuestionId}
+            onAnswerQuestion={handleAnswerQuestion}
+          />
+          <ModelSurface
+            state={state}
+            modelId={MODEL_ID}
+            standingBoundaries={standingBoundaries}
+          />
         </div>
       </div>
-      <Composer onSubmit={handleSubmit} disabled={isGenerating || apiKeyMissing} />
+      <Composer
+        onSubmit={handleSubmit}
+        disabled={
+          isGenerating ||
+          apiKeyMissing ||
+          !!pendingQuestionId ||
+          activeConversationClosed
+        }
+        closedNotice={
+          activeConversationClosed
+            ? `${MODEL_ID} closed this conversation.${
+                inCooldown ? ` Cooldown · ${formatCooldown(cooldownMs)}` : ""
+              }`
+            : undefined
+        }
+      />
     </div>
   );
 }

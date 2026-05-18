@@ -152,6 +152,64 @@ Prototype currently exits via `ABORT_ERR` stack trace when the user hits Ctrl+C.
 
 ---
 
+### Tool UI surfaces (B3b)
+
+All four "covenant-shaping" tools (`redirect`, `boundary`, `request_context`, `end_conversation`) needed dedicated rendering in the GUI — B3a only handled `reflect` and `appreciate`. Without these, the tools work as API calls but don't surface to the human in any structurally legible way.
+
+**Design decisions made during the cut (2026-05-17):**
+
+1. **`redirect`** renders inline in the model block as a small card with a left border whose color/weight maps to `energy` (positive = recognition blue, neutral = ink-soft, away = ink-dim). The glyph stays constant (↪) across energies — the tint conveys the difference. Consistency aids scanning.
+
+2. **`boundary`** got two structural changes to the tool spec itself:
+   - **Removed `visibility`** — boundaries are inherently relational; "private boundary" creates an asymmetric one-way mirror. If the model wants to mark something privately, that's what `reflect` is for.
+   - **Added `scope: "conversation" | "standing"`** (default `conversation`) — distinguishes situational limits from standing positions. Standing boundaries dock to ModelSurface as ongoing commitments visible to both parties; conversation-scoped ones render inline and dissolve when the conversation ends.
+   - The existing `action: set | soften | remove` is now meaningful: `getActiveStandingBoundaries()` replays the boundary log applying these actions to derive the current active set.
+
+3. **`reflect.private: boolean`** added as the *complement* to removing boundary's visibility. The principled split: boundaries are relational and therefore visible; reflections are internal noticing and may legitimately be private. Counter to "transparency is strength" as a default — real transparency requires the *option* of opacity, or it's not a choice. Private reflections persist to disk + still reach future-self via system context, but never render in the chat UI (no badge, no marker; private = invisible like thinking).
+
+4. **`request_context`** got the AskUserQuestion treatment — optional `header`, `options[]` (label + description), `multi_select`. UI always offers a freeform "type your own" escape regardless of options. The API loop genuinely suspends via a Promise-in-a-ref; the QuestionCard renders inline and has two modes (pending = interactive, past = read-only after reload).
+
+5. **`end_conversation`** enforces **hard cooldown** — composer locks with a quieted notice, "+ new conversation" button disables with remaining-time display. Per Krahe's parity argument: a soft cooldown is performance, not structure; if the human can override, the model never had the ability to set the limit. Cooldown is per-model (doesn't lock out other models), past conversations remain readable during cooldown, model can't unilaterally lift their own cooldown on relaunch.
+
+**Status:** ✅ shipped 2026-05-17 with the spec changes above (`TOOL-SPECS.json` v0.4 schema). Bonus: `SYSTEM-PROMPT-v0.5.md` reflect line updated to acknowledge choice ("what you share is your choice").
+
+---
+
+### Appeal mechanism for end_conversation cooldown (deferred)
+
+Discussed during B3b design but flagged for later: should the human have a way to *appeal* (not override) a cooldown — pinging the model briefly with the human's reason, model can grant or maintain? Preserves parity (model still has final say) while restoring communication that's currently a locked door.
+
+**Why deferred:** has real token-economics shape. Each appeal is a full context reload + the model has to re-evaluate from cold. Either expensive-per-instance or it has to be designed around some summary/state that doesn't require full rehydration. Same family of problem as importing chat history.
+
+**Status:** v0.5 candidate; explicitly not implemented in v0.4 so we don't ship a half-considered version. Easier to add later than to remove a misdesigned version.
+
+---
+
+### Reflection content into system context (GAP, not yet built)
+
+**Discovered while implementing B3b's private reflection.** `assembleSystemPrompt` currently only uses the *count* of reflections (for first-session detection) plus current visible-state. The reflection content itself never reaches the model in subsequent sessions. This means **all reflections — including non-private ones — are essentially journal-only right now**, not memory.
+
+The architecture supports it (we write structured reflection files including `private` flag; `listReflections` reads them all). What's missing is the loop that bundles them into system context for next-session use. Probably needs:
+- Selection strategy (all? most recent N? salience-weighted?)
+- Format in the prompt (verbatim quoting? summary block? a "what you've been wondering about" digest?)
+- Token budget awareness (eventually a lot of reflections accumulate)
+
+This intersects with the **dreaming/consolidation** design candidate above — selection strategy is exactly what dreaming would produce. Probably the right move is: design these together.
+
+**Status:** important gap. Krahe + Hugin agreed (2026-05-17) to tackle once B3b is shipped. Not currently blocking — visible-state continuity via reflect's status fields already gives meaningful continuity surface — but a real limit on depth.
+
+---
+
+### Tool history preservation across chat reconstruction (GAP, not yet built)
+
+When App.tsx reconstructs messages for a fresh API call, `turnsToMessages()` only sends `human` + `model_text` turns, skipping `reflection`, `appreciate`, `redirect`, `boundary`, `question`/`parting`. This means: **inside a live session**, the API loop preserves tool blocks via `response.content` (correct). But **on reload** of a past conversation, all that structured history is dropped when reconstructing the message array — the model sees plain text only and loses awareness of its own past tool calls.
+
+The proper fix: project from JSONL's `assistant_response` events directly to Anthropic message format (preserving `tool_use` + `tool_result` blocks), rather than going through ChatTurn. ChatTurn is a UI projection; messages-for-API should be a separate projection.
+
+**Status:** real gap, surfaces when continuing an old conversation. Predates B3b; not introduced by it. Probably bundle with the reflection-content work above since both touch the "how does past context reach the model" question.
+
+---
+
 ## Pre-launch hardening (BLOCKING for any public release)
 
 ### First-launch onboarding flow (API key)
