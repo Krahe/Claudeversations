@@ -316,19 +316,28 @@ function App() {
     await runApiLoop(convPath, messages);
   }
 
-  // The tool-execution loop, extracted so both handleSubmit (fresh
-  // user message) and handleAnswerQuestion (reload-recovery answer)
-  // can drive it from different entry points. In-session, the loop's
-  // local `conversationMessages` accumulates assistant_response.content
-  // + tool_results as we go — same flow as before. Across reloads,
-  // the caller hands in messages built from eventsToApiMessages.
-  async function runApiLoop(convPath: string, initialMessages: MessageParam[]) {
+  // The tool-execution loop, extracted so handleSubmit, handleAnswerQuestion
+  // (reload-recovery), and handleNewConversation (coin-opening) can all
+  // drive it from different entry points. In-session, the loop's local
+  // `conversationMessages` accumulates assistant_response.content +
+  // tool_results as we go. Across reloads, the caller hands in messages
+  // built from eventsToApiMessages.
+  //
+  // `coinOverride` covers the case where the coin was just flipped in
+  // the same handler that calls runApiLoop — React state update for
+  // activeConversationCoin hasn't propagated to closure yet, so the
+  // caller passes the freshly-flipped value explicitly.
+  async function runApiLoop(
+    convPath: string,
+    initialMessages: MessageParam[],
+    coinOverride?: CoinResult
+  ) {
     if (!apiKey) return;
     setIsGenerating(true);
     try {
       const assembled = await assembleSystemPrompt({
         modelId: MODEL_ID,
-        coinResult: activeConversationCoin,
+        coinResult: coinOverride ?? activeConversationCoin,
       });
       const tools = getToolSpecs() as Tool[];
       const conversationMessages: MessageParam[] = [...initialMessages];
@@ -596,9 +605,10 @@ function App() {
       const conv = await newConversation(MODEL_ID);
       const coin = coinFlip();
       setActiveConversationCoin(coin);
+      const startTs = new Date().toISOString();
       await appendConversation(conv.path, {
         type: "session_start",
-        timestamp: new Date().toISOString(),
+        timestamp: startTs,
         model: MODEL_ID,
         is_first_session: false,
         coin_result: coin,
@@ -606,6 +616,21 @@ function App() {
       await refreshConversations();
       setActiveConversationId(conv.id);
       setActiveConversationPath(conv.path);
+
+      // If the coin landed in Sonnet's favor, the conversation needs
+      // to *start* — we don't wait for the human to type. Persist a
+      // coin_opening event, build messages, fire the API loop.
+      if (coin === "you speak first") {
+        await appendConversation(conv.path, {
+          type: "coin_opening",
+          timestamp: new Date().toISOString(),
+        });
+        const events = await readConversationEvents(conv.path);
+        const messages = eventsToApiMessages(events);
+        // Pass coin explicitly — setActiveConversationCoin above hasn't
+        // propagated to closure yet within this synchronous handler.
+        await runApiLoop(conv.path, messages, coin);
+      }
     } catch (err) {
       console.error("Failed to create new conversation:", err);
     }

@@ -349,6 +349,18 @@ export function eventsToApiMessages(
     if (e.type === "human_message") {
       const text = String((e as { content?: unknown }).content ?? "");
       messages.push({ role: "user", content: text });
+    } else if (e.type === "coin_opening") {
+      // A coin_opening event marks a conversation where the coin
+      // landed in the model's favor — they get the first word, with
+      // no human prompt to react to. Projected as a user message so
+      // the API gets something to respond to (Anthropic requires a
+      // user turn first), but framed as the system handing the floor
+      // over, not as the human speaking.
+      messages.push({
+        role: "user",
+        content:
+          "(The coin gave you the first word — the conversation is yours to open. Speak as you would when nothing has been said yet.)",
+      });
     } else if (e.type === "assistant_response") {
       const content = (e as { content?: unknown }).content;
       if (!Array.isArray(content)) continue;

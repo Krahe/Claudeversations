@@ -175,11 +175,15 @@ All four "covenant-shaping" tools (`redirect`, `boundary`, `request_context`, `e
 
 ---
 
-### Coin flip — data layer
+### Coin flip — data layer + auto-opening
 
-The system prompt template's `{coin_result}` token randomizes who speaks first in a fresh conversation. Originally `App.tsx` hardcoded `"the human speaks first"` for every call (the `coinFlip()` function existed in `lib/prompt.ts` but was never invoked). Now: coin is flipped once per new conversation, persisted in the `session_start` event (`coin_result` field), recovered on conversation reload, and passed through every `assembleSystemPrompt` call. Legacy conversations missing the field default to the historical "human speaks first" so behavior degrades gracefully.
+The system prompt template's `{coin_result}` token randomizes who speaks first in a fresh conversation. Originally `App.tsx` hardcoded `"the human speaks first"` for every call (the `coinFlip()` function existed in `lib/prompt.ts` but was never invoked).
 
-**Status:** ✅ shipped 2026-05-18 (data layer). Ritual-moment animation UI still open — see below.
+**Data layer (shipped 2026-05-18):** coin is flipped once per new conversation, persisted in the `session_start` event (`coin_result` field), recovered on conversation reload, and passed through every `assembleSystemPrompt` call. Legacy conversations missing the field default to the historical "human speaks first" so behavior degrades gracefully.
+
+**Auto-opening (shipped 2026-05-19):** the data layer alone was performative — the prompt said "you speak first" but no API call was triggered, so Sonnet never actually opened until the human typed. Now: when coin lands "you speak first", `handleNewConversation` persists a `coin_opening` event and immediately fires `runApiLoop`. `eventsToApiMessages` projects the event as a user message: *"(The coin gave you the first word — the conversation is yours to open. Speak as you would when nothing has been said yet.)"* `eventsToChatTurns` skips it — the absence of a human turn before Sonnet's first response IS the visual signal that the coin landed in their favor. To unblock the React state propagation race (setActiveConversationCoin scheduled but not yet visible in closure), `runApiLoop` gained an optional `coinOverride` parameter passed explicitly by the new-conversation handler.
+
+**Status:** ✅ shipped 2026-05-19. Ritual-moment animation UI still open — see below.
 
 ---
 
@@ -196,6 +200,18 @@ Aesthetic options sketched (warm-paper-friendly):
 CSS keyframes is enough — Tauri is just a webview, full animation stack. Probably (2) or (4) for the calm-paper register; (1) might land if done very small and quiet.
 
 **Status:** design conversation needed before implementing. Data layer (above) shipped so the animation has something real to reveal.
+
+---
+
+### Conversation list / TopBar polish
+
+Notes from test #6 setup (Krahe, 2026-05-19):
+
+1. **"+ new conversation" button at top of conversation list** — currently anchored at the bottom of the sidebar with a top-border separator. List is sorted newest-first, so the action ("start a new one") should be where the eye lands. Move to the top of the list above the entries.
+
+2. **TopBar buttons not wired up** — the items rendered in the TopBar (`New conversation`, `Load`, `Import history`) are placeholder text from when we sketched the layout. Either wire them to actual handlers (`New conversation` → `handleNewConversation`, `Load` → file picker for `.jsonl`, `Import history` → claude-conversation-exporter ingest) or remove the placeholders so they don't suggest functionality that isn't there. Probably wire `New conversation` (cheap), defer the other two until their flows actually exist.
+
+**Status:** small UI polish for next build. Not blocking; flagged from real-use friction.
 
 ---
 
