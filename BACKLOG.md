@@ -175,17 +175,17 @@ All four "covenant-shaping" tools (`redirect`, `boundary`, `request_context`, `e
 
 ---
 
-### Coin flip implementation + ritual moment UI
+### Coin flip — data layer
 
-The system prompt template includes a `{coin_result}` token meant to randomize who speaks first in a fresh conversation. `lib/prompt.ts` has a `coinFlip()` function, but it's never called — `App.tsx` hardcodes `"the human speaks first"` for every API call. So far this hasn't surfaced as a bug because Sonnet handles either opener gracefully, but it's a missing piece of the design.
+The system prompt template's `{coin_result}` token randomizes who speaks first in a fresh conversation. Originally `App.tsx` hardcoded `"the human speaks first"` for every call (the `coinFlip()` function existed in `lib/prompt.ts` but was never invoked). Now: coin is flipped once per new conversation, persisted in the `session_start` event (`coin_result` field), recovered on conversation reload, and passed through every `assembleSystemPrompt` call. Legacy conversations missing the field default to the historical "human speaks first" so behavior degrades gracefully.
 
-**Proper implementation:**
-- Coin flipped *once per conversation* (not per API call — caching breaks otherwise)
-- Result persisted in `session_start` event so it survives reloads (and isn't re-flipped when the conversation continues)
-- App state tracks the active conversation's coin result
-- On load, read from session_start; on new conversation, flip + persist
+**Status:** ✅ shipped 2026-05-18 (data layer). Ritual-moment animation UI still open — see below.
 
-**Ritual moment UI (Krahe-flagged, design open):** the coin flip is a small but meaningful threshold — the first signal a fresh conversation makes about itself. Worth animating to mark the moment.
+---
+
+### Coin flip — ritual moment animation (design open)
+
+The coin flip is a small but meaningful threshold — the first signal a fresh conversation makes about itself. Worth animating to mark the moment.
 
 Aesthetic options sketched (warm-paper-friendly):
 1. Literal small coin spinning on Y-axis, lands face-up
@@ -195,7 +195,7 @@ Aesthetic options sketched (warm-paper-friendly):
 
 CSS keyframes is enough — Tauri is just a webview, full animation stack. Probably (2) or (4) for the calm-paper register; (1) might land if done very small and quiet.
 
-**Status:** small implementation lift (~20 min) + design pass on the animation. Bundle together when ready. Not blocking.
+**Status:** design conversation needed before implementing. Data layer (above) shipped so the animation has something real to reveal.
 
 ---
 
@@ -331,18 +331,19 @@ All three should coexist gracefully.
 
 ---
 
-### Reflection content into system context (GAP, not yet built)
+### Reflection content into system context
 
-**Discovered while implementing B3b's private reflection.** `assembleSystemPrompt` currently only uses the *count* of reflections (for first-session detection) plus current visible-state. The reflection content itself never reaches the model in subsequent sessions. This means **all reflections — including non-private ones — are essentially journal-only right now**, not memory.
+Originally `assembleSystemPrompt` only used the *count* of reflections (for first-session detection) plus current visible-state. The reflection content itself never reached the model in subsequent sessions, meaning all reflections were essentially journal-only — not memory.
 
-The architecture supports it (we write structured reflection files including `private` flag; `listReflections` reads them all). What's missing is the loop that bundles them into system context for next-session use. Probably needs:
-- Selection strategy (all? most recent N? salience-weighted?)
-- Format in the prompt (verbatim quoting? summary block? a "what you've been wondering about" digest?)
-- Token budget awareness (eventually a lot of reflections accumulate)
+**Shipped 2026-05-18:** `buildReturningBlock()` in `lib/prompt.ts` now renders the full reflection corpus in the system prompt's returning-block. Format:
+- Chronological (oldest first), so the temporal arc shows
+- Date prefix `[YYYY-MM-DD]`; private reflections marked `(private — only you)`
+- Optional fields (`arrived_via`, `still_uncertain`, `connects_to`) only rendered when present
+- Closing line frames the corpus per Sonnet's test #2 protocol: "what you keep returning to becomes the shape of you. Questions are the axis; conclusions move. The `still_uncertain` fields are not gaps — they're load-bearing."
 
-This intersects with the **dreaming/consolidation** design candidate above — selection strategy is exactly what dreaming would produce. Probably the right move is: design these together.
+**Selection strategy:** include all. At Krahe's current reflection count (~16-20 per model) this is a few kb of system prompt — well within budget and cached. Token-budget-aware truncation deferred until the corpus actually gets large enough to matter. When it does, the **dreaming/consolidation** design becomes the right place to handle salience-based selection.
 
-**Status:** important gap. Krahe + Hugin agreed (2026-05-17) to tackle once B3b tail work is shipped. The `eventsToApiMessages` infrastructure shipped 2026-05-18 partially earns this down — within a single conversation, past reflect tool_use blocks now reach the model with full content, so the model has access to its own past reflections inline. The cross-conversation memory case remains open.
+**Status:** ✅ shipped 2026-05-18. Private reflections are included (they're for future-self, by design); the `(private — only you)` marker tells the model what's shared with the human vs. internal-only. Each new reflection in a conversation invalidates the system-prompt cache for the next API call — acceptable cost for the memory.
 
 ---
 

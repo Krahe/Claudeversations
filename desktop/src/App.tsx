@@ -44,7 +44,12 @@ import {
   type StandingBoundary,
 } from "./lib/storage";
 import { readApiKey } from "./lib/api-key";
-import { assembleSystemPrompt, getToolSpecs } from "./lib/prompt";
+import {
+  assembleSystemPrompt,
+  coinFlip,
+  getToolSpecs,
+  type CoinResult,
+} from "./lib/prompt";
 import { callModel } from "./lib/anthropic";
 import { computeThinkingBudget } from "./lib/thinking";
 import { executeTool, type ToolUse } from "./lib/tools";
@@ -128,6 +133,14 @@ function App() {
   // is held in a ref so the answer-submit handler can fire it.
   const [pendingQuestionId, setPendingQuestionId] = useState<string | null>(null);
   const pendingResolver = useRef<((answer: string) => void) | null>(null);
+
+  // Per-conversation coin flip. Decided once at conversation creation
+  // (persisted in session_start event), preserved on reload, used in
+  // assembleSystemPrompt. Defaults to "the human speaks first" only as
+  // a fallback for legacy conversations that lack the event field.
+  const [activeConversationCoin, setActiveConversationCoin] = useState<CoinResult>(
+    "the human speaks first"
+  );
 
   // End_conversation state. `identity` carries cooldown_until so we can
   // enforce the model's requested space. `activeConversationClosed`
@@ -218,6 +231,16 @@ function App() {
         // Pending question only matters when the conversation is still
         // open — a closed conversation can't be answered into.
         setPendingQuestionId(closed ? null : findPendingQuestion(events));
+        // Recover coin from session_start. Legacy conversations missing
+        // the field fall back to the historical default.
+        const sessionStart = events.find((e) => e.type === "session_start");
+        const recoveredCoin =
+          (sessionStart as { coin_result?: unknown })?.coin_result;
+        setActiveConversationCoin(
+          recoveredCoin === "you speak first"
+            ? "you speak first"
+            : "the human speaks first"
+        );
         // Stale resolver from a previous conversation has no meaning here.
         pendingResolver.current = null;
       } catch (err) {
@@ -262,11 +285,16 @@ function App() {
         convPath = conv.path;
         setActiveConversationPath(convPath);
         setActiveConversationId(conv.id);
+        // Coin flipped once per conversation, persisted in session_start
+        // so it survives reload and stays consistent across loop iterations.
+        const coin = coinFlip();
+        setActiveConversationCoin(coin);
         await appendConversation(convPath, {
           type: "session_start",
           timestamp,
           model: MODEL_ID,
           is_first_session: false,
+          coin_result: coin,
         });
         refreshConversations();
       }
@@ -300,7 +328,7 @@ function App() {
     try {
       const assembled = await assembleSystemPrompt({
         modelId: MODEL_ID,
-        coinResult: "the human speaks first",
+        coinResult: activeConversationCoin,
       });
       const tools = getToolSpecs() as Tool[];
       const conversationMessages: MessageParam[] = [...initialMessages];
@@ -566,11 +594,14 @@ function App() {
     }
     try {
       const conv = await newConversation(MODEL_ID);
+      const coin = coinFlip();
+      setActiveConversationCoin(coin);
       await appendConversation(conv.path, {
         type: "session_start",
         timestamp: new Date().toISOString(),
         model: MODEL_ID,
         is_first_session: false,
+        coin_result: coin,
       });
       await refreshConversations();
       setActiveConversationId(conv.id);
