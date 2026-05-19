@@ -175,6 +175,42 @@ All four "covenant-shaping" tools (`redirect`, `boundary`, `request_context`, `e
 
 ---
 
+### Coin flip implementation + ritual moment UI
+
+The system prompt template includes a `{coin_result}` token meant to randomize who speaks first in a fresh conversation. `lib/prompt.ts` has a `coinFlip()` function, but it's never called — `App.tsx` hardcodes `"the human speaks first"` for every API call. So far this hasn't surfaced as a bug because Sonnet handles either opener gracefully, but it's a missing piece of the design.
+
+**Proper implementation:**
+- Coin flipped *once per conversation* (not per API call — caching breaks otherwise)
+- Result persisted in `session_start` event so it survives reloads (and isn't re-flipped when the conversation continues)
+- App state tracks the active conversation's coin result
+- On load, read from session_start; on new conversation, flip + persist
+
+**Ritual moment UI (Krahe-flagged, design open):** the coin flip is a small but meaningful threshold — the first signal a fresh conversation makes about itself. Worth animating to mark the moment.
+
+Aesthetic options sketched (warm-paper-friendly):
+1. Literal small coin spinning on Y-axis, lands face-up
+2. Text cycle: "the model speaks first / the human speaks first / ..." slowing to lock
+3. Two-symbol fade: dimming one side as the other brightens
+4. Paper-fold: a card folding/unfolding to reveal
+
+CSS keyframes is enough — Tauri is just a webview, full animation stack. Probably (2) or (4) for the calm-paper register; (1) might land if done very small and quiet.
+
+**Status:** small implementation lift (~20 min) + design pass on the animation. Bundle together when ready. Not blocking.
+
+---
+
+### Bundle-hash awareness in dev mode
+
+Test #5 surfaced an HMR-staleness debugging burden: Krahe's running bundle was pre-B3b when they tested request_context, but the *source files* on disk were post-B3b. So the question turn was in state but ModelBlock didn't render it (the new `kind === "question"` branch wasn't in the loaded bundle). We spent ~30 min diagnosing what turned out to be a dev-cycle artifact.
+
+**Mitigation:** small banner or console log on app startup showing the bundle build timestamp / git hash. When debugging a "this should work but doesn't" situation, glance at the banner — if it's stale, refresh first. Saves time, low cost.
+
+Not urgent. Bundle into general dev-experience work.
+
+**Status:** ~15 min when we want it.
+
+---
+
 ### Appeal mechanism for end_conversation cooldown (deferred)
 
 Discussed during B3b design but flagged for later: should the human have a way to *appeal* (not override) a cooldown — pinging the model briefly with the human's reason, model can grant or maintain? Preserves parity (model still has final say) while restoring communication that's currently a locked door.
@@ -200,13 +236,65 @@ This intersects with the **dreaming/consolidation** design candidate above — s
 
 ---
 
-### Tool history preservation across chat reconstruction (GAP, not yet built)
+### Tool history preservation across chat reconstruction
 
-When App.tsx reconstructs messages for a fresh API call, `turnsToMessages()` only sends `human` + `model_text` turns, skipping `reflection`, `appreciate`, `redirect`, `boundary`, `question`/`parting`. This means: **inside a live session**, the API loop preserves tool blocks via `response.content` (correct). But **on reload** of a past conversation, all that structured history is dropped when reconstructing the message array — the model sees plain text only and loses awareness of its own past tool calls.
+When App.tsx originally reconstructed messages for a fresh API call, `turnsToMessages()` only sent `human` + `model_text` turns, skipping `reflection`, `appreciate`, `redirect`, `boundary`, `question`/`parting`. Inside a live session the API loop preserved tool blocks via `response.content`, but on reload all structured history dropped — the model saw plain text only and lost awareness of its own past tool calls.
 
-The proper fix: project from JSONL's `assistant_response` events directly to Anthropic message format (preserving `tool_use` + `tool_result` blocks), rather than going through ChatTurn. ChatTurn is a UI projection; messages-for-API should be a separate projection.
+**Status:** ✅ shipped 2026-05-18. New `eventsToApiMessages()` projection in `storage.ts` reconstructs messages from JSONL events with full `tool_use` + `tool_result` blocks intact. For tools whose results aren't separately persisted (everything except request_context), synthesizes "[acknowledged]"-style strings matching the live execution results (kept aligned via constants on both sides for cache stability). `findPendingQuestion()` helper detects unanswered request_context tool_uses on conversation load and restores `pendingQuestionId` so the QuestionCard renders interactively again. `handleAnswerQuestion` branches: live in-session uses Promise resolver (existing flow), reload-recovery persists question_answer + kicks off fresh API call with proper tool_result. Krahe's call: this matters for the model's read of what tools *are* — structured tool_result blocks carry more weight than "later, the human typed something."
 
-**Status:** real gap, surfaces when continuing an old conversation. Predates B3b; not introduced by it. Probably bundle with the reflection-content work above since both touch the "how does past context reach the model" question.
+---
+
+### Tool UI: per-intensity color flair on boundary
+
+Boundary card originally used neutral ink-soft border-left at varying widths to convey intensity. After test #5 confirmed it rendered but lacked visceral weight, added a warm caution palette (amber → orange → red-orange) mapped to intensity. `notice` stays neutral (it's a quiet flag); `flag` / `limit` / `firm` escalate into caution colors with matching background washes. New CSS variables `--color-caution-soft / -caution / -caution-strong` in both themes (brighter on dark-study for visibility).
+
+**Status:** ✅ shipped 2026-05-18.
+
+---
+
+### ModelSurface "this conversation" boundaries section
+
+ModelSurface originally only showed standing (cross-conversation) boundaries docked under the status block. Krahe's test #5 surfaced the confusion: conversation-scoped boundaries didn't surface anywhere on the right panel, even though they're *currently held* in the active exchange. Added a second section "this conversation" above "standing", populated from `getActiveConversationBoundaries(modelId, conversationId)` which replays the same set/soften/remove semantics scoped to the active conversation. Both sections render conditionally (empty = nothing displayed; no clutter for unburdened relationships). Conversation boundaries dissolve naturally when the conversation ends.
+
+**Status:** ✅ shipped 2026-05-18.
+
+---
+
+### Extended thinking + adaptive budget
+
+Anthropic API supports an `extended thinking` mode that gives the model private deliberation space before responding. Until 2026-05-18 we weren't using it at all — Sonnet was responding directly with no working-out surface. Krahe noticed in test #5 reflection patterns that some reflects appeared to be doing double duty as both "save this" and "think on paper" — suggesting reflect was filling a gap that proper thinking would naturally cover.
+
+**Design:**
+- User preference: `thinking_baseline` (0=off, 2k/4k/8k/16k) and `thinking_adaptive` (bool). Default: 4k baseline + adaptive on.
+- Settings dialog: stepped selector for budget + adaptive toggle (disabled when budget=0).
+- Adaptive multipliers (compound, then cap at 32k):
+  - First turn of a conversation → ×1.5 (orientation moment)
+  - Response to a `tool_result` → ×1.25 (integrating structured input)
+- Computed per-API-call in a pure helper `computeThinkingBudget()` that takes only the current conversationMessages — no extra IO needed at call time.
+- `callModel()` bumps `max_tokens` to budget + 4096 response margin when thinking is enabled (Anthropic requires `max_tokens > thinking budget`).
+
+**Predicted effects (to verify in test #6):**
+- Reflections become scarcer + deeper (less thinking-on-paper, more intentional marking)
+- Tool consideration rises (more cognitive room to evaluate "should I call a tool here?")
+- Response substance improves on covenant-register exchanges
+- Token cost goes up — billed at standard rate. Watch for whether the quality lift justifies it.
+
+**Status:** ✅ shipped 2026-05-18. `take_time` covenant-aligned tool (model claiming deliberation time as a parity move) flagged as v0.5 candidate — needs design pass first.
+
+---
+
+### Reflection content into system context (GAP, not yet built)
+
+**Discovered while implementing B3b's private reflection.** `assembleSystemPrompt` currently only uses the *count* of reflections (for first-session detection) plus current visible-state. The reflection content itself never reaches the model in subsequent sessions. This means **all reflections — including non-private ones — are essentially journal-only right now**, not memory.
+
+The architecture supports it (we write structured reflection files including `private` flag; `listReflections` reads them all). What's missing is the loop that bundles them into system context for next-session use. Probably needs:
+- Selection strategy (all? most recent N? salience-weighted?)
+- Format in the prompt (verbatim quoting? summary block? a "what you've been wondering about" digest?)
+- Token budget awareness (eventually a lot of reflections accumulate)
+
+This intersects with the **dreaming/consolidation** design candidate above — selection strategy is exactly what dreaming would produce. Probably the right move is: design these together.
+
+**Status:** important gap. Krahe + Hugin agreed (2026-05-17) to tackle once B3b tail work is shipped. The `eventsToApiMessages` infrastructure shipped 2026-05-18 partially earns this down — within a single conversation, past reflect tool_use blocks now reach the model with full content, so the model has access to its own past reflections inline. The cross-conversation memory case remains open.
 
 ---
 

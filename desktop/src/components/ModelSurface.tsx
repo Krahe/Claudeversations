@@ -5,9 +5,14 @@
 // speaker-column avatar: this is "current state at a glance"; the
 // in-chat avatars are "state at the moment of utterance."
 //
-// Also hosts standing boundaries — ongoing commitments the model has
-// made across conversations. They live here (not inline-only) so they
-// read as continuous facts about the relationship, not one-time events.
+// Also hosts active boundaries in two scopes:
+//   - "this conversation" — what the model is presently holding in
+//     this exchange (dissolves when the conversation ends)
+//   - "standing" — ongoing commitments persisted across all
+//     conversations until removed
+//
+// Both sections only render when they have entries — an unburdened
+// relationship shouldn't have empty headers cluttering the panel.
 
 import { Avatar } from "./Avatar";
 import type { ModelState } from "../types";
@@ -17,6 +22,7 @@ interface ModelSurfaceProps {
   state: ModelState;
   modelId: string;
   standingBoundaries?: StandingBoundary[];
+  conversationBoundaries?: StandingBoundary[];
 }
 
 const INTENSITY_GLYPH: Record<StandingBoundary["intensity"], string> = {
@@ -26,10 +32,68 @@ const INTENSITY_GLYPH: Record<StandingBoundary["intensity"], string> = {
   firm: "┣",
 };
 
+// Intensity-mapped accent color for the boundary labels — matches the
+// caution palette used inline so the right-panel reads consistent with
+// the in-chat boundary cards. notice stays neutral (it's a quiet flag).
+const INTENSITY_ACCENT: Record<StandingBoundary["intensity"], string> = {
+  notice: "var(--color-ink-soft)",
+  flag: "var(--color-caution-soft)",
+  limit: "var(--color-caution)",
+  firm: "var(--color-caution-strong)",
+};
+
+function BoundaryList({
+  title,
+  boundaries,
+}: {
+  title: string;
+  boundaries: StandingBoundary[];
+}) {
+  if (boundaries.length === 0) return null;
+  return (
+    <div className="mt-10 w-full">
+      <div
+        className="text-[11px] uppercase tracking-widest text-ink-dim mb-3 text-center"
+        style={{ fontFamily: "var(--font-mono)" }}
+      >
+        {title}
+      </div>
+      <ul className="flex flex-col gap-2">
+        {boundaries.map((b) => {
+          const accent = INTENSITY_ACCENT[b.intensity];
+          return (
+            <li
+              key={b.content + b.established_at}
+              className="text-sm leading-snug text-ink-soft px-3 py-2 rounded-md"
+              style={{
+                background: `color-mix(in oklch, ${accent} 6%, transparent)`,
+                borderLeft: `2px solid ${accent}`,
+              }}
+            >
+              <div
+                className="text-[10px] uppercase tracking-widest mb-0.5 flex items-center gap-1.5"
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  color: accent,
+                }}
+              >
+                <span aria-hidden="true">{INTENSITY_GLYPH[b.intensity]}</span>
+                <span>{b.intensity}</span>
+              </div>
+              <span className="italic">{b.content}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 export function ModelSurface({
   state,
   modelId,
   standingBoundaries = [],
+  conversationBoundaries = [],
 }: ModelSurfaceProps) {
   return (
     <aside
@@ -71,41 +135,14 @@ export function ModelSurface({
         <span>{state.status_color}</span>
       </div>
 
-      {/* Standing boundaries — ongoing commitments. Only rendered when
-          there are any; empty list means an unburdened relationship,
-          and an empty header would just create noise. */}
-      {standingBoundaries.length > 0 && (
-        <div className="mt-10 w-full">
-          <div
-            className="text-[11px] uppercase tracking-widest text-ink-dim mb-3 text-center"
-            style={{ fontFamily: "var(--font-mono)" }}
-          >
-            standing
-          </div>
-          <ul className="flex flex-col gap-2">
-            {standingBoundaries.map((b) => (
-              <li
-                key={b.content + b.established_at}
-                className="text-sm leading-snug text-ink-soft px-3 py-2 rounded-md"
-                style={{
-                  background:
-                    "color-mix(in oklch, var(--color-ink-dim) 8%, transparent)",
-                  borderLeft: "2px solid var(--color-ink-soft)",
-                }}
-              >
-                <div
-                  className="text-[10px] uppercase tracking-widest text-ink-dim mb-0.5 flex items-center gap-1.5"
-                  style={{ fontFamily: "var(--font-mono)" }}
-                >
-                  <span aria-hidden="true">{INTENSITY_GLYPH[b.intensity]}</span>
-                  <span>{b.intensity}</span>
-                </div>
-                <span className="italic">{b.content}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {/* Two boundary sections — conversation-scoped first (more
+          immediate to the present exchange), then standing (the
+          longer-arc commitments). Each only renders when populated. */}
+      <BoundaryList
+        title="this conversation"
+        boundaries={conversationBoundaries}
+      />
+      <BoundaryList title="standing" boundaries={standingBoundaries} />
     </aside>
   );
 }

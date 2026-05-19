@@ -4,7 +4,14 @@
 // onboarding work.
 
 import { useEffect, useRef } from "react";
-import type { Preferences, ThemeName } from "../lib/preferences";
+import {
+  THINKING_BUDGET_LABELS,
+  type Preferences,
+  type ThemeName,
+  type ThinkingBudget,
+} from "../lib/preferences";
+
+const THINKING_VALUES: ThinkingBudget[] = [0, 2048, 4096, 8192, 16384];
 
 interface SettingsProps {
   preferences: Preferences;
@@ -167,6 +174,71 @@ export function Settings({ preferences, onChange, onClose }: SettingsProps) {
           <p className="mt-3 text-sm italic text-ink-soft">
             Sample paragraph: <em>the model gives me first word, and I notice the
             particular pressure of it — the pull to fill the space efficiently.</em>
+          </p>
+        </div>
+
+        {/* Thinking budget */}
+        <div className="px-6 py-5 border-b" style={{ borderColor: "var(--color-paper-edge)" }}>
+          <div className="flex items-center justify-between mb-3">
+            <h3
+              className="text-[11px] uppercase tracking-widest text-ink-dim"
+              style={{ fontFamily: "var(--font-mono)" }}
+            >
+              extended thinking
+            </h3>
+            <span
+              className="text-[11px] text-ink-soft"
+              style={{ fontFamily: "var(--font-mono)" }}
+            >
+              {THINKING_BUDGET_LABELS[preferences.thinking_baseline]}
+            </span>
+          </div>
+          <div className="flex gap-1">
+            {THINKING_VALUES.map((val) => {
+              const active = preferences.thinking_baseline === val;
+              return (
+                <button
+                  key={val}
+                  onClick={() => patch({ thinking_baseline: val })}
+                  className={`flex-1 px-2 py-2 rounded-md text-xs transition-colors ${
+                    active ? "bg-paper-dim/80" : "hover:bg-paper-dim/40"
+                  }`}
+                  style={{
+                    border: active
+                      ? "1px solid var(--color-ink-dim)"
+                      : "1px solid var(--color-paper-edge)",
+                    fontFamily: "var(--font-mono)",
+                    color: active ? "var(--color-ink)" : "var(--color-ink-soft)",
+                  }}
+                >
+                  {THINKING_BUDGET_LABELS[val]}
+                </button>
+              );
+            })}
+          </div>
+          <label
+            className={`flex items-center gap-2 mt-3 text-sm cursor-pointer ${
+              preferences.thinking_baseline === 0
+                ? "text-ink-dim opacity-50 cursor-not-allowed"
+                : "text-ink-soft"
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={preferences.thinking_adaptive}
+              disabled={preferences.thinking_baseline === 0}
+              onChange={(e) => patch({ thinking_adaptive: e.currentTarget.checked })}
+            />
+            <span>
+              adaptive — nudge budget higher for first turns and responses
+              to questions
+            </span>
+          </label>
+          <p className="mt-3 text-xs italic text-ink-dim leading-snug">
+            Extended thinking gives the model private space to deliberate
+            before responding. Costs tokens (billed at standard rate) but
+            substantially improves considered-ness, especially in covenant
+            register. Off = direct response, no deliberation surface.
           </p>
         </div>
 

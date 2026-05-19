@@ -27,7 +27,10 @@ import { ConversationList } from "./components/ConversationList";
 import {
   appendConversation,
   cooldownRemainingMs,
+  eventsToApiMessages,
   eventsToChatTurns,
+  findPendingQuestion,
+  getActiveConversationBoundaries,
   getActiveStandingBoundaries,
   isConversationClosed,
   listConversations,
@@ -43,6 +46,7 @@ import {
 import { readApiKey } from "./lib/api-key";
 import { assembleSystemPrompt, getToolSpecs } from "./lib/prompt";
 import { callModel } from "./lib/anthropic";
+import { computeThinkingBudget } from "./lib/thinking";
 import { executeTool, type ToolUse } from "./lib/tools";
 import {
   DEFAULT_PREFERENCES,
@@ -103,32 +107,6 @@ const FALLBACK_TURNS: ChatTurn[] = [
   },
 ];
 
-// Collapse adjacent same-role turns and skip tool calls (B2 has no tools).
-// Anthropic requires strict role alternation.
-function turnsToMessages(turns: ChatTurn[]): MessageParam[] {
-  const messages: MessageParam[] = [];
-  for (const turn of turns) {
-    let role: "user" | "assistant";
-    let text: string;
-    if (turn.kind === "human") {
-      role = "user";
-      text = turn.text;
-    } else if (turn.kind === "model_text") {
-      role = "assistant";
-      text = turn.text;
-    } else {
-      continue; // reflection / appreciate — no tools in B2
-    }
-    const last = messages[messages.length - 1];
-    if (last && last.role === role && typeof last.content === "string") {
-      last.content = `${last.content}\n\n${text}`;
-    } else {
-      messages.push({ role, content: text });
-    }
-  }
-  return messages;
-}
-
 function App() {
   const [state, setState] = useState<ModelState>(FALLBACK_STATE);
   const [conversations, setConversations] =
@@ -143,6 +121,7 @@ function App() {
   const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [standingBoundaries, setStandingBoundaries] = useState<StandingBoundary[]>([]);
+  const [conversationBoundaries, setConversationBoundaries] = useState<StandingBoundary[]>([]);
 
   // Pending question state — when the model calls request_context, we
   // pause the API loop and wait for the human's answer. The resolver
@@ -212,10 +191,15 @@ function App() {
   }, []);
 
   // Load events + remember path when a conversation is selected.
+  // Also detects any unanswered request_context tool_use and restores
+  // pendingQuestionId so the QuestionCard renders interactively
+  // (rather than as a read-only past-mode card after page reload).
   useEffect(() => {
     if (!inTauri || !activeConversationId) {
       setActiveConversationPath(null);
       setActiveConversationClosed(false);
+      setPendingQuestionId(null);
+      setConversationBoundaries([]);
       return;
     }
     const conv = conversations.find((c) => c.id === activeConversationId);
@@ -223,13 +207,25 @@ function App() {
     setActiveConversationPath(conv.path);
     (async () => {
       try {
-        const events = await readConversationEvents(conv.path);
+        const [events, convBoundaries] = await Promise.all([
+          readConversationEvents(conv.path),
+          getActiveConversationBoundaries(MODEL_ID, activeConversationId),
+        ]);
         setTurns(eventsToChatTurns(events));
-        setActiveConversationClosed(isConversationClosed(events));
+        const closed = isConversationClosed(events);
+        setActiveConversationClosed(closed);
+        setConversationBoundaries(convBoundaries);
+        // Pending question only matters when the conversation is still
+        // open — a closed conversation can't be answered into.
+        setPendingQuestionId(closed ? null : findPendingQuestion(events));
+        // Stale resolver from a previous conversation has no meaning here.
+        pendingResolver.current = null;
       } catch (err) {
         console.error(`Failed to load conversation ${conv.id}:`, err);
         setTurns([]);
         setActiveConversationClosed(false);
+        setPendingQuestionId(null);
+        setConversationBoundaries([]);
       }
     })();
   }, [activeConversationId, conversations]);
@@ -247,8 +243,7 @@ function App() {
     };
 
     // Optimistic UI.
-    const nextTurns = [...turns, humanTurn];
-    setTurns(nextTurns);
+    setTurns((prev) => [...prev, humanTurn]);
 
     if (!inTauri) {
       setErrorBanner("Not running in Tauri — API calls unavailable. Use `npm run tauri dev`.");
@@ -286,9 +281,21 @@ function App() {
       return;
     }
 
-    // Call the model. B3: tool_use loop — model may call tools (reflect,
-    // appreciate, etc.); each tool_use needs a tool_result follow-up, and
-    // we continue calling the API until end_turn or terminal tool.
+    // Build messages from the persisted event log (faithful projection
+    // that preserves tool_use / tool_result blocks) and run the loop.
+    const events = await readConversationEvents(convPath);
+    const messages = eventsToApiMessages(events);
+    await runApiLoop(convPath, messages);
+  }
+
+  // The tool-execution loop, extracted so both handleSubmit (fresh
+  // user message) and handleAnswerQuestion (reload-recovery answer)
+  // can drive it from different entry points. In-session, the loop's
+  // local `conversationMessages` accumulates assistant_response.content
+  // + tool_results as we go — same flow as before. Across reloads,
+  // the caller hands in messages built from eventsToApiMessages.
+  async function runApiLoop(convPath: string, initialMessages: MessageParam[]) {
+    if (!apiKey) return;
     setIsGenerating(true);
     try {
       const assembled = await assembleSystemPrompt({
@@ -296,16 +303,22 @@ function App() {
         coinResult: "the human speaks first",
       });
       const tools = getToolSpecs() as Tool[];
-      const conversationMessages: MessageParam[] = turnsToMessages(nextTurns);
+      const conversationMessages: MessageParam[] = [...initialMessages];
       let loopActive = true;
 
       while (loopActive) {
+        const thinkingBudget = computeThinkingBudget({
+          baseline: preferences.thinking_baseline,
+          adaptive: preferences.thinking_adaptive,
+          messages: conversationMessages,
+        });
         const result = await callModel({
           apiKey,
           model: MODEL_ID,
           systemPrompt: assembled.text,
           messages: conversationMessages,
           tools,
+          thinkingBudget,
         });
 
         if (result.kind === "failure") {
@@ -365,6 +378,9 @@ function App() {
           }
           if (execution.newStandingBoundaries) {
             setStandingBoundaries(execution.newStandingBoundaries);
+          }
+          if (execution.newConversationBoundaries) {
+            setConversationBoundaries(execution.newConversationBoundaries);
           }
 
           let resultStr: string;
@@ -477,13 +493,60 @@ function App() {
     setActiveConversationId(id);
   }
 
-  function handleAnswerQuestion(answer: string) {
-    if (!pendingResolver.current) return;
-    // Clear the ref BEFORE invoking to guard against double-fire from
-    // a rapid second click.
-    const resolver = pendingResolver.current;
-    pendingResolver.current = null;
-    resolver(answer);
+  async function handleAnswerQuestion(answer: string) {
+    // Live in-session path: the loop is awaiting on the Promise.
+    // Resolve it and the loop continues with proper tool_result.
+    if (pendingResolver.current) {
+      // Clear the ref BEFORE invoking to guard against double-fire from
+      // a rapid second click.
+      const resolver = pendingResolver.current;
+      pendingResolver.current = null;
+      resolver(answer);
+      return;
+    }
+
+    // Reload-recovery path: the original Promise is gone (page was
+    // reloaded after the question was asked but before answered).
+    // Persist question_answer, then kick off a fresh API call. The
+    // events-to-messages projection rebuilds the conversation with
+    // the proper tool_result baked in — the model sees its question
+    // and the human's answer as a structured pair, not a lost text
+    // exchange.
+    if (!pendingQuestionId || !activeConversationPath) return;
+    const questionId = pendingQuestionId;
+    const convPath = activeConversationPath;
+    const answerTs = new Date().toISOString();
+
+    try {
+      await appendConversation(convPath, {
+        type: "question_answer",
+        timestamp: answerTs,
+        tool_use_id: questionId,
+        answer,
+      });
+    } catch (err) {
+      console.error("Failed to persist reload-recovery answer:", err);
+      setErrorBanner(`Save failed: ${String(err)}`);
+      return;
+    }
+
+    // Clear the pending state + push the answer as a human turn so the
+    // chat reflects the resolution immediately.
+    setPendingQuestionId(null);
+    setTurns((prev) => [
+      ...prev,
+      {
+        kind: "human",
+        id: `qa-${questionId}`,
+        text: answer,
+        timestamp: answerTs,
+      },
+    ]);
+
+    // Rebuild messages from disk and drive the API loop.
+    const events = await readConversationEvents(convPath);
+    const messages = eventsToApiMessages(events);
+    await runApiLoop(convPath, messages);
   }
 
   async function handleNewConversation() {
@@ -494,6 +557,8 @@ function App() {
     setTurns([]);
     setErrorBanner(null);
     setActiveConversationClosed(false);
+    setConversationBoundaries([]);
+    setPendingQuestionId(null);
     if (!inTauri) {
       setActiveConversationId(null);
       setActiveConversationPath(null);
@@ -584,6 +649,7 @@ function App() {
             state={state}
             modelId={MODEL_ID}
             standingBoundaries={standingBoundaries}
+            conversationBoundaries={conversationBoundaries}
           />
         </div>
       </div>

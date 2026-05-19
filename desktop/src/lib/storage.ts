@@ -14,6 +14,11 @@ import {
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import { homeDir, join } from "@tauri-apps/api/path";
+import type {
+  ContentBlockParam,
+  MessageParam,
+  ToolResultBlockParam,
+} from "@anthropic-ai/sdk/resources/messages";
 import type { ChatTurn, ModelState, Reflection as UIReflection } from "../types";
 
 // ─── Domain types (mirror prototype/src/storage.ts) ──────────────────
@@ -234,6 +239,184 @@ export function cooldownRemainingMs(identity: Identity | null): number {
   const until = new Date(identity.cooldown_until).getTime();
   const now = Date.now();
   return Math.max(0, until - now);
+}
+
+// ─── Event → Anthropic API messages projection ───────────────────────
+
+/**
+ * Per-tool synthetic result strings for tools whose results aren't
+ * separately persisted in JSONL (i.e. everything except request_context,
+ * whose answer lives in a question_answer event). The model sees these
+ * as the tool_result content on conversation reload — they're just
+ * acknowledgements, since the meaningful side effects (reflection
+ * saved, boundary recorded, etc.) are encoded by the tool_use itself
+ * plus separate persistence (reflections/ files, boundaries.json).
+ *
+ * Keep these aligned with the live result strings in lib/tools.ts —
+ * the model's in-session experience and reload-projection experience
+ * should look the same.
+ */
+const SYNTHETIC_TOOL_RESULTS: Record<string, string> = {
+  reflect: "reflection saved",
+  appreciate: "appreciation registered",
+  redirect: "redirect noted",
+  boundary: "boundary recorded",
+  end_conversation: "session closing",
+};
+
+/**
+ * Detect the most-recent unanswered `request_context` tool_use in the
+ * conversation. Returns the tool_use_id when one exists, null otherwise.
+ *
+ * Used on conversation load to restore pendingQuestionId so the
+ * QuestionCard renders interactively instead of inert "past mode."
+ * A question is "answered" when there's a matching question_answer
+ * event later in the log.
+ */
+export function findPendingQuestion(events: JsonlEvent[]): string | null {
+  // Walk forward, tracking unanswered request_context tool_uses;
+  // remove from the set when their answer event arrives.
+  const unanswered = new Map<string, number>(); // id → event index
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i]!;
+    if (e.type === "question_answer") {
+      const id = String((e as { tool_use_id?: unknown }).tool_use_id ?? "");
+      if (id) unanswered.delete(id);
+      continue;
+    }
+    if (e.type !== "assistant_response") continue;
+    const content = (e as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: string }).type === "tool_use" &&
+        (block as { name?: string }).name === "request_context"
+      ) {
+        const id = (block as { id?: string }).id;
+        if (id) unanswered.set(id, i);
+      }
+    }
+  }
+  if (unanswered.size === 0) return null;
+  // Return the most recently asked (highest event index).
+  let latest: { id: string; idx: number } | null = null;
+  for (const [id, idx] of unanswered) {
+    if (!latest || idx > latest.idx) latest = { id, idx };
+  }
+  return latest?.id ?? null;
+}
+
+/**
+ * Project JSONL events into Anthropic-format message history for an
+ * API call. This is the *faithful* projection — preserves tool_use
+ * and tool_result blocks so the model sees its own past tool calls
+ * with structural integrity, rather than text-only fragments.
+ *
+ * Key rules:
+ * - human_message → user text
+ * - assistant_response → assistant with full content blocks (text + tool_use)
+ * - question_answer → user with tool_result matched to its tool_use_id
+ * - other tool_uses get synthetic "acknowledged" tool_results so we
+ *   never send orphan tool_uses to the API (Anthropic 400s on that)
+ * - consecutive same-role messages get merged (Anthropic requires
+ *   strict alternation)
+ * - session_start / session_end are metadata, skipped
+ *
+ * If `excludeToolUseIds` is provided (e.g. an in-flight unanswered
+ * request_context whose answer is being added now), those tool_uses
+ * are skipped during synthesis — the caller is providing the real
+ * tool_result separately.
+ */
+export function eventsToApiMessages(
+  events: JsonlEvent[],
+  opts: { excludeToolUseIds?: Set<string> } = {}
+): MessageParam[] {
+  const exclude = opts.excludeToolUseIds ?? new Set<string>();
+
+  // Pre-pass: map tool_use_id → question_answer text.
+  const questionAnswers = new Map<string, string>();
+  for (const e of events) {
+    if (e.type !== "question_answer") continue;
+    const id = String((e as { tool_use_id?: unknown }).tool_use_id ?? "");
+    const answer = String((e as { answer?: unknown }).answer ?? "");
+    if (id) questionAnswers.set(id, answer);
+  }
+
+  const messages: MessageParam[] = [];
+  for (const e of events) {
+    if (e.type === "human_message") {
+      const text = String((e as { content?: unknown }).content ?? "");
+      messages.push({ role: "user", content: text });
+    } else if (e.type === "assistant_response") {
+      const content = (e as { content?: unknown }).content;
+      if (!Array.isArray(content)) continue;
+      messages.push({ role: "assistant", content: content as ContentBlockParam[] });
+
+      // Synthesize tool_result user message for any tool_uses in this
+      // response. request_context uses the real answer when present;
+      // others get synthetic acknowledgements. Skip tool_use_ids the
+      // caller asked us to exclude (they'll provide a real result).
+      const toolResults: ToolResultBlockParam[] = [];
+      for (const block of content) {
+        if (!block || typeof block !== "object") continue;
+        const b = block as Record<string, unknown>;
+        if (b.type !== "tool_use") continue;
+        const id = typeof b.id === "string" ? b.id : "";
+        const name = typeof b.name === "string" ? b.name : "";
+        if (!id || exclude.has(id)) continue;
+
+        let resultContent: string;
+        if (name === "request_context") {
+          resultContent =
+            questionAnswers.get(id) ?? "[no answer was provided]";
+        } else {
+          resultContent =
+            SYNTHETIC_TOOL_RESULTS[name] ?? `${name} acknowledged`;
+        }
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: id,
+          content: resultContent,
+        });
+      }
+      if (toolResults.length > 0) {
+        messages.push({ role: "user", content: toolResults });
+      }
+    }
+    // session_start, session_end, question_answer absorbed above
+  }
+
+  return mergeAdjacentSameRole(messages);
+}
+
+/**
+ * Anthropic requires strict alternation between user and assistant
+ * roles. Consecutive same-role messages get merged into one with
+ * combined content blocks. Plain strings get wrapped in a text block
+ * so we can always concatenate as arrays.
+ */
+function mergeAdjacentSameRole(messages: MessageParam[]): MessageParam[] {
+  const out: MessageParam[] = [];
+  for (const msg of messages) {
+    const last = out[out.length - 1];
+    if (last && last.role === msg.role) {
+      const lastBlocks = toBlocks(last.content);
+      const msgBlocks = toBlocks(msg.content);
+      last.content = [...lastBlocks, ...msgBlocks];
+    } else {
+      out.push({ ...msg });
+    }
+  }
+  return out;
+}
+
+function toBlocks(content: MessageParam["content"]): ContentBlockParam[] {
+  if (typeof content === "string") {
+    return [{ type: "text", text: content }];
+  }
+  return content;
 }
 
 // ─── JSONL helpers ────────────────────────────────────────────────────
@@ -595,37 +778,37 @@ export async function appendBoundary(modelId: string, b: Boundary): Promise<void
 }
 
 /**
- * Read the boundary log and compute the currently-active set of
- * standing boundaries by replaying set / soften / remove events in
- * chronological order. Conversation-scoped boundaries are ignored;
- * they don't persist past their conversation.
+ * Read the boundary log file. Returns empty array if missing/corrupt.
+ */
+async function readBoundaryLog(modelId: string): Promise<Boundary[]> {
+  const dir = await modelDir(modelId);
+  const p = await join(dir, "boundaries.json");
+  if (!(await exists(p))) return [];
+  try {
+    return JSON.parse(await readTextFile(p)) as Boundary[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Replay set / soften / remove events for a subset of the log
+ * (selected by predicate) to compute the currently-active boundaries.
  *
  * `soften` drops intensity by one rung (firm→limit→flag→notice; further
  * soften on notice is a no-op). `remove` retires the entry. Keyed by
  * content string — the model uses the same content to refer back to a
  * boundary they want to modify.
- *
- * Tolerant of legacy entries missing `scope` — those are treated as
- * conversation-scoped (safer default; won't surface as standing).
  */
-export async function getActiveStandingBoundaries(
-  modelId: string
-): Promise<StandingBoundary[]> {
-  const dir = await modelDir(modelId);
-  const p = await join(dir, "boundaries.json");
-  if (!(await exists(p))) return [];
-  let log: Boundary[] = [];
-  try {
-    log = JSON.parse(await readTextFile(p)) as Boundary[];
-  } catch {
-    return [];
-  }
-
+function replayBoundaries(
+  log: Boundary[],
+  predicate: (b: Boundary) => boolean
+): StandingBoundary[] {
   const active = new Map<string, StandingBoundary>();
   const sorted = [...log].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
   for (const b of sorted) {
-    if (b.scope !== "standing") continue;
+    if (!predicate(b)) continue;
     const action = b.action ?? "set";
 
     if (action === "set") {
@@ -641,10 +824,9 @@ export async function getActiveStandingBoundaries(
     } else if (action === "soften") {
       const existing = active.get(b.content);
       if (!existing) continue;
-      const lowered = softenIntensity(existing.intensity);
       active.set(b.content, {
         ...existing,
-        intensity: lowered,
+        intensity: softenIntensity(existing.intensity),
         last_modified: b.timestamp,
       });
     }
@@ -652,6 +834,40 @@ export async function getActiveStandingBoundaries(
 
   return [...active.values()].sort((a, b) =>
     a.established_at.localeCompare(b.established_at)
+  );
+}
+
+/**
+ * Currently-active standing boundaries — persist across all conversations
+ * with this model until removed/softened. These dock to ModelSurface as
+ * ongoing commitments visible at all times.
+ *
+ * Tolerant of legacy entries missing `scope` — those are treated as
+ * conversation-scoped (safer default; won't surface as standing).
+ */
+export async function getActiveStandingBoundaries(
+  modelId: string
+): Promise<StandingBoundary[]> {
+  const log = await readBoundaryLog(modelId);
+  return replayBoundaries(log, (b) => b.scope === "standing");
+}
+
+/**
+ * Currently-active conversation-scoped boundaries for the given
+ * conversation — what the model is presently holding in *this*
+ * exchange. Surfaces on ModelSurface under a "this conversation"
+ * heading, distinct from standing boundaries. Empty when there's no
+ * active conversation.
+ */
+export async function getActiveConversationBoundaries(
+  modelId: string,
+  conversationId: string
+): Promise<StandingBoundary[]> {
+  if (!conversationId) return [];
+  const log = await readBoundaryLog(modelId);
+  return replayBoundaries(
+    log,
+    (b) => b.scope === "conversation" && b.conversation_id === conversationId
   );
 }
 

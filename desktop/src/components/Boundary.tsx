@@ -20,14 +20,44 @@ interface BoundaryProps {
   boundary: BoundaryTurn;
 }
 
-const INTENSITY_WEIGHT: Record<
+// Intensity → visual weight: width, color, font weight, and a subtle
+// background wash for the heavier two. notice stays neutral (it's a
+// quiet flag); flag/limit/firm escalate into warm caution territory
+// (amber → orange → red-orange). The theme palette handles dark/light
+// — caution variables shift brighter on dark-study so they stay visible.
+const INTENSITY_STYLE: Record<
   BoundaryTurn["intensity"],
-  { border: string; opacity: number; fontWeight: number }
+  {
+    border: string;
+    accent: string; // CSS var for the border + label color
+    fontWeight: number;
+    wash: number; // 0-100, % alpha of accent for background tint
+  }
 > = {
-  notice: { border: "1px", opacity: 0.7, fontWeight: 400 },
-  flag: { border: "2px", opacity: 0.85, fontWeight: 400 },
-  limit: { border: "3px", opacity: 1.0, fontWeight: 500 },
-  firm: { border: "4px", opacity: 1.0, fontWeight: 600 },
+  notice: {
+    border: "1px",
+    accent: "var(--color-ink-soft)",
+    fontWeight: 400,
+    wash: 0,
+  },
+  flag: {
+    border: "2px",
+    accent: "var(--color-caution-soft)",
+    fontWeight: 400,
+    wash: 6,
+  },
+  limit: {
+    border: "3px",
+    accent: "var(--color-caution)",
+    fontWeight: 500,
+    wash: 9,
+  },
+  firm: {
+    border: "4px",
+    accent: "var(--color-caution-strong)",
+    fontWeight: 600,
+    wash: 12,
+  },
 };
 
 const ACTION_VERB: Record<BoundaryTurn["action"], string> = {
@@ -37,34 +67,37 @@ const ACTION_VERB: Record<BoundaryTurn["action"], string> = {
 };
 
 export function Boundary({ boundary }: BoundaryProps) {
-  const weight = INTENSITY_WEIGHT[boundary.intensity];
+  const style = INTENSITY_STYLE[boundary.intensity];
 
   return (
     <div
-      className="my-3 pl-4 py-2"
+      className="my-3 pl-4 pr-3 py-2 rounded-r-md"
       style={{
-        borderLeft: `${weight.border} solid var(--color-ink-soft)`,
-        opacity: weight.opacity,
+        borderLeft: `${style.border} solid ${style.accent}`,
+        background:
+          style.wash > 0
+            ? `color-mix(in oklch, ${style.accent} ${style.wash}%, transparent)`
+            : undefined,
       }}
     >
       <div
-        className="text-[11px] uppercase tracking-widest mb-1 flex items-center gap-2 text-ink-dim"
-        style={{ fontFamily: "var(--font-mono)" }}
+        className="text-[11px] uppercase tracking-widest mb-1 flex items-center gap-2"
+        style={{
+          fontFamily: "var(--font-mono)",
+          color: style.accent,
+        }}
       >
         <span>┃ {ACTION_VERB[boundary.action]}</span>
-        <span aria-hidden="true">·</span>
+        <span aria-hidden="true" className="opacity-70">·</span>
         <span>{boundary.intensity}</span>
         {boundary.scope === "standing" && (
           <>
-            <span aria-hidden="true">·</span>
+            <span aria-hidden="true" className="opacity-70">·</span>
             <span>standing</span>
           </>
         )}
       </div>
-      <p
-        className="italic text-ink"
-        style={{ fontWeight: weight.fontWeight }}
-      >
+      <p className="italic text-ink" style={{ fontWeight: style.fontWeight }}>
         {boundary.content}
       </p>
     </div>

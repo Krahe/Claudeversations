@@ -5,6 +5,7 @@
 
 import {
   appendBoundary,
+  getActiveConversationBoundaries,
   getActiveStandingBoundaries,
   setCooldown,
   writeReflection,
@@ -50,6 +51,9 @@ export interface ToolExecution {
   newState?: PersistedState;
   // If boundary touched the standing-boundary set, the refreshed list.
   newStandingBoundaries?: StandingBoundary[];
+  // If boundary touched the current conversation's boundary set, the
+  // refreshed list. Only set for conversation-scoped boundary actions.
+  newConversationBoundaries?: StandingBoundary[];
 }
 
 export interface ToolContext {
@@ -115,7 +119,9 @@ export async function executeTool(
 
       return {
         tool_use_id: use.id,
-        result: isPrivate ? "private reflection saved" : "reflection saved",
+        // Keep result strings static + matching storage.ts SYNTHETIC_TOOL_RESULTS
+        // so cache hits when JSONL is later projected via eventsToApiMessages.
+        result: "reflection saved",
         terminal: false,
         awaitsHumanAnswer: false,
         uiTurns,
@@ -159,11 +165,18 @@ export async function executeTool(
         action,
       });
 
-      // Refresh the active standing list — only matters for standing
-      // scope, but cheap enough to always recompute and return.
+      // Refresh whichever scope was touched so the corresponding UI
+      // surface (ModelSurface section) updates.
       const newStandingBoundaries =
         scope === "standing"
           ? await getActiveStandingBoundaries(ctx.modelId)
+          : undefined;
+      const newConversationBoundaries =
+        scope === "conversation"
+          ? await getActiveConversationBoundaries(
+              ctx.modelId,
+              ctx.conversationId
+            )
           : undefined;
 
       const uiTurn: ChatTurn = {
@@ -178,11 +191,14 @@ export async function executeTool(
 
       return {
         tool_use_id: use.id,
-        result: `boundary ${action} (intensity=${intensity}, scope=${scope})`,
+        // Static result string — matches storage.ts SYNTHETIC_TOOL_RESULTS
+        // for cache-stable projections across reload.
+        result: "boundary recorded",
         terminal: false,
         awaitsHumanAnswer: false,
         uiTurns: [uiTurn],
         newStandingBoundaries,
+        newConversationBoundaries,
       };
     }
 

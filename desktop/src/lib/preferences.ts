@@ -8,14 +8,38 @@ import { homeDir, join } from "@tauri-apps/api/path";
 
 export type ThemeName = "warm-paper" | "dark-study";
 
+/**
+ * Extended-thinking baseline budget in tokens. 0 = thinking disabled
+ * (model responds directly without deliberation space). Higher = more
+ * tokens of private working-out before the response. Stepped values
+ * give the user a predictable dial without numeric guessing.
+ */
+export type ThinkingBudget = 0 | 2048 | 4096 | 8192 | 16384;
+
+export const THINKING_BUDGET_LABELS: Record<ThinkingBudget, string> = {
+  0: "off",
+  2048: "light · 2k",
+  4096: "standard · 4k",
+  8192: "deep · 8k",
+  16384: "very deep · 16k",
+};
+
 export interface Preferences {
   theme: ThemeName;
   body_size_px: number; // 13-22 reasonable range
+  // Baseline thinking tokens. 0 disables extended thinking.
+  thinking_baseline: ThinkingBudget;
+  // When true, mechanical signals (first turn, response to a tool_result,
+  // etc.) can nudge the baseline higher for moments that deserve more
+  // deliberation. Capped to keep cost predictable.
+  thinking_adaptive: boolean;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
   theme: "warm-paper",
   body_size_px: 17,
+  thinking_baseline: 4096,
+  thinking_adaptive: true,
 };
 
 async function prefsPath(): Promise<string> {

@@ -65,6 +65,11 @@ export interface CallArgs {
   messages: MessageParam[];
   tools?: Tool[];
   maxTokens?: number;
+  // Extended thinking budget in tokens. 0 or undefined → thinking
+  // disabled. When > 0, the model gets private deliberation space
+  // before responding. maxTokens is bumped automatically to ensure
+  // room for both thinking + response (Anthropic requires it).
+  thinkingBudget?: number;
 }
 
 export interface CallResult {
@@ -96,12 +101,28 @@ export async function callModel(args: CallArgs): Promise<CallResult | CallFailur
         cache_control: { type: "ephemeral" },
       },
     ];
+    // Extended thinking requires max_tokens > thinking budget. Add a
+    // healthy response margin on top of the budget so the model can
+    // both deliberate AND produce a substantive reply.
+    const thinkingEnabled = (args.thinkingBudget ?? 0) > 0;
+    const responseMargin = 4096;
+    const maxTokens =
+      args.maxTokens ??
+      (thinkingEnabled ? args.thinkingBudget! + responseMargin : 4096);
     const response = await client.messages.create({
       model: args.model,
-      max_tokens: args.maxTokens ?? 4096,
+      max_tokens: maxTokens,
       system: systemBlocks,
       tools: args.tools && args.tools.length > 0 ? args.tools : undefined,
       messages: args.messages,
+      ...(thinkingEnabled
+        ? {
+            thinking: {
+              type: "enabled",
+              budget_tokens: args.thinkingBudget!,
+            },
+          }
+        : {}),
     });
     return { kind: "success", response };
   } catch (err) {

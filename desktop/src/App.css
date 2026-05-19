@@ -25,6 +25,9 @@
   --color-ink-dim: var(--ink-dim);
   --color-reflection: var(--reflection);
   --color-reflection-edge: var(--reflection-edge);
+  --color-caution-soft: var(--caution-soft);
+  --color-caution: var(--caution);
+  --color-caution-strong: var(--caution-strong);
 
   --font-serif: "Crimson Pro", Georgia, "Times New Roman", serif;
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
@@ -43,6 +46,12 @@
   --ink-dim: #8a8175;
   --reflection: #c5dbf0;
   --reflection-edge: #9ac0e0;
+  /* Caution palette — used by boundary tool to convey weight via color
+   * in addition to border width. Warm tones (amber→orange→red-orange)
+   * read as "something serious here" without screaming "ERROR." */
+  --caution-soft: #c9a567;
+  --caution: #d97757;
+  --caution-strong: #c44e3e;
   --panel-tint: rgba(255, 255, 255, 0.4);
   --panel-tint-deep: rgba(243, 238, 228, 0.25);
   --wash-strength: 4%;
@@ -64,6 +73,12 @@
   --ink-dim: #786e62;
   --reflection: #2d4a6b;
   --reflection-edge: #547aa3;
+  /* Caution palette — lighter versions for visibility against the dark
+   * warm-near-black background. Same warm-amber→orange→red-orange
+   * progression as warm-paper, just shifted brighter. */
+  --caution-soft: #e0c178;
+  --caution: #e88869;
+  --caution-strong: #d96650;
   --panel-tint: rgba(255, 250, 240, 0.025);
   --panel-tint-deep: rgba(0, 0, 0, 0.18);
   --wash-strength: 22%;
