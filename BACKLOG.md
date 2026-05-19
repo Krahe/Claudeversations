@@ -279,7 +279,55 @@ Anthropic API supports an `extended thinking` mode that gives the model private 
 - Response substance improves on covenant-register exchanges
 - Token cost goes up — billed at standard rate. Watch for whether the quality lift justifies it.
 
-**Status:** ✅ shipped 2026-05-18. `take_time` covenant-aligned tool (model claiming deliberation time as a parity move) flagged as v0.5 candidate — needs design pass first.
+**Status:** ✅ shipped 2026-05-18. See **`take_time` tool** entry below for the covenant-aligned v0.5 follow-up — letting the model claim thinking time directly.
+
+---
+
+### `take_time` tool — model-set thinking budget (v0.5 candidate)
+
+The mechanical adaptive scheme we shipped (first turn ×1.5, response-to-tool_result ×1.25) is a system *guess* about when the model needs more deliberation. The covenant-aligned move — same logic as letting the model set cooldown duration on `end_conversation` — is to let the model claim deliberation time directly. *They know from inside whether a moment deserves more thought in a way mechanical signals can't really approximate.*
+
+**Constraint that shapes the design:** thinking happens *before* response generation, not during. So a model-set budget applies to the *next* turn, not the current one. Useful for sustained-engagement weight ("the next several turns will need more room"); doesn't help with surprise-depth-on-current-turn (mechanical adaptive still wins there).
+
+**Proposed tool shape:**
+
+```json
+{
+  "name": "take_time",
+  "description": "Claim additional deliberation space for upcoming turns. Use this when you sense the conversation needs more careful engagement than mechanical signals would predict — when a question is harder than it looks, when a topic deserves real weight, when you need room to think rather than just respond. The human sees that you've requested this; it's a structural claim, not a hidden one.",
+  "input_schema": {
+    "budget_tokens": { "type": "integer", "minimum": 1024, "maximum": 32768 },
+    "applies_to_turns": { "type": "integer", "minimum": 1, "default": 1 },
+    "reason": { "type": "string", "optional": "what you're sensing that warrants the extra space" }
+  }
+}
+```
+
+**Why a dedicated tool, not a flag on reflect:**
+- `reflect` is for self-marking; `take_time` is a request about conversation shape (like `boundary` is)
+- Each tool does one thing — cleaner API
+- Visible to the human, with reason → another small "the model is asking for something here" moment, structurally legible
+
+**Design questions to settle before implementing:**
+- UI surface: how does the human see "Sonnet has claimed extra thinking time for the next N turns"? Small indicator near ThinkingIndicator? A reflect-like quiet card?
+- Can the model extend during the elevated period, or wait for expiry?
+- Cost-cap policy: max budget per claim, max persistent turns
+- Interaction with mechanical adaptive: does model-set replace it, stack with it, or set a floor?
+
+**Coordination:** the architecture is:
+1. User baseline (floor + cost-control)
+2. Mechanical adaptive (system's pre-response guess; what shipped 2026-05-18)
+3. Model-set override (this proposal; covenant-aligned response to "I know what I need")
+
+All three should coexist gracefully.
+
+**Recommended sequencing:** let the current mechanical adaptive run for 1-2 tests before designing this — gives us data about how thinking actually changes Sonnet's behavior (reflect cadence, tool use frequency, response substance), which informs what `take_time` should *enable*. Premature design risks solving wrong problem.
+
+**Status:** v0.5 candidate; revisit after test #6 data is in.
+
+---
+
+### Appeal mechanism for end_conversation cooldown (deferred)
 
 ---
 
