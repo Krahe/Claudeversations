@@ -12,9 +12,18 @@ interface ComposerProps {
   // Visually distinct from the "model is thinking" placeholder, which
   // is just a transient lock.
   closedNotice?: string;
+  // Override the disabled-state placeholder text. Default is
+  // "model is thinking…"; pass a custom string when the disable reason
+  // is something other than generation (e.g. pending question card).
+  disabledPlaceholder?: string;
 }
 
-export function Composer({ onSubmit, disabled, closedNotice }: ComposerProps) {
+export function Composer({
+  onSubmit,
+  disabled,
+  closedNotice,
+  disabledPlaceholder,
+}: ComposerProps) {
   const [value, setValue] = useState("");
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -56,7 +65,11 @@ export function Composer({ onSubmit, disabled, closedNotice }: ComposerProps) {
         >
           <textarea
             className="composer w-full bg-transparent outline-none text-ink placeholder:text-ink-dim/70 disabled:cursor-wait"
-            placeholder={disabled ? "model is thinking…" : "Your turn. Shift+Enter for newline."}
+            placeholder={
+              disabled
+                ? disabledPlaceholder ?? "model is thinking…"
+                : "Your turn. Shift+Enter for newline."
+            }
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={handleKeyDown}

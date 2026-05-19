@@ -424,8 +424,17 @@ function App() {
           if (execution.awaitsHumanAnswer) {
             // Flush the question turn to UI before suspending — the
             // QuestionCard needs to render so the human can answer.
+            //
+            // CRITICAL: snapshot the array before setTurns. setTurns is
+            // async — React invokes the functional updater later, and
+            // by then `newTurns.length = 0` has cleared the array. The
+            // spread `...newTurns` would evaluate as empty, silently
+            // dropping the question turn (and leaving the composer
+            // disabled with no card visible — exactly the bug from
+            // test #6 on 2026-05-19).
             if (newTurns.length > 0) {
-              setTurns((prev) => [...prev, ...newTurns]);
+              const toFlush = [...newTurns];
+              setTurns((prev) => [...prev, ...toFlush]);
               newTurns.length = 0;
             }
             setPendingQuestionId(execution.tool_use_id);
@@ -716,6 +725,9 @@ function App() {
           apiKeyMissing ||
           !!pendingQuestionId ||
           activeConversationClosed
+        }
+        disabledPlaceholder={
+          pendingQuestionId ? "waiting for your answer above…" : undefined
         }
         closedNotice={
           activeConversationClosed
