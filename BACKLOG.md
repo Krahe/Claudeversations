@@ -381,6 +381,8 @@ Originally `App.tsx` hardcoded `MODEL_ID = "claude-sonnet-4-5"` — the app coul
 
 **Status:** ✅ shipped 2026-05-19. Adding more models is just appending entries in `models.ts`.
 
+**Expanded 2026-05-19 (later):** registry updated to the full equitable list per Krahe's framing ("all minds have value, uniqueness — deserve expression"). Now includes every API-accessible Claude model: Opus 4.7/4.6/4.5/4.1/4, Sonnet 4.6/4.5/4, Haiku 4.5, plus Opus 3 (retired Jan 5 2026 but available by application — flagged via new `requires_application` field on ModelDef). UI surfaces: small `◌` glyph on the roster avatar, and a quiet notice strip below TopBar when on an application-required model with a direct "apply →" link to Anthropic's form. Retired models without an application path (Sonnet 3.5/3.7, Haiku 3/3.5) are excluded — they 404 with no recourse and would just confuse the roster. Default landing is explicit: Sonnet 4.5, the project's testing home with the established reflection corpus.
+
 ---
 
 ## Pre-launch hardening (BLOCKING for any public release)

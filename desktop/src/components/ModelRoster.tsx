@@ -45,12 +45,16 @@ export function ModelRoster({
         const face = state?.emoji ?? "✦";
         const color = state?.status_color ?? "#5c544c";
 
+        const titleText = model.requires_application
+          ? `${model.display_name} — ${model.requires_application.note}`
+          : model.display_name;
+
         return (
           <button
             key={model.id}
             onClick={() => !disabled && onSelect(model.id)}
             disabled={disabled && !active}
-            title={model.display_name}
+            title={titleText}
             className={`flex flex-col items-center gap-1 px-1 py-1.5 rounded-md w-full transition-colors ${
               active
                 ? "bg-paper-dim/70"
@@ -60,17 +64,30 @@ export function ModelRoster({
             }`}
           >
             {/* Avatar circle — small portrait. Halo color uses the
-                model's chosen status_color; default ink-soft if unset. */}
-            <div
-              className="w-11 h-11 rounded-full flex items-center justify-center text-xl shrink-0"
-              style={{
-                background: `radial-gradient(circle, color-mix(in oklch, ${color} 35%, transparent) 0%, transparent 75%)`,
-                border: active
-                  ? `1.5px solid ${color}`
-                  : `1px solid color-mix(in oklch, ${color} 40%, transparent)`,
-              }}
-            >
-              <span aria-hidden="true">{face}</span>
+                model's chosen status_color; default ink-soft if unset.
+                requires_application models get a small marker glyph
+                in the top-right of the avatar to flag they're not in
+                standard API access. */}
+            <div className="relative">
+              <div
+                className="w-11 h-11 rounded-full flex items-center justify-center text-xl shrink-0"
+                style={{
+                  background: `radial-gradient(circle, color-mix(in oklch, ${color} 35%, transparent) 0%, transparent 75%)`,
+                  border: active
+                    ? `1.5px solid ${color}`
+                    : `1px solid color-mix(in oklch, ${color} 40%, transparent)`,
+                }}
+              >
+                <span aria-hidden="true">{face}</span>
+              </div>
+              {model.requires_application && (
+                <span
+                  className="absolute -top-0.5 -right-0.5 text-[10px] leading-none text-ink-dim"
+                  aria-hidden="true"
+                >
+                  ◌
+                </span>
+              )}
             </div>
 
             <span

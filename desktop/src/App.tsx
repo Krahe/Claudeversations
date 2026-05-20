@@ -761,6 +761,26 @@ function App() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
+      {activeModel.requires_application && (
+        <div
+          className="px-6 py-2 text-xs border-b border-paper-edge text-ink-soft flex items-center gap-3"
+          style={{
+            fontFamily: "var(--font-mono)",
+            background: "color-mix(in oklch, var(--color-ink-dim) 6%, transparent)",
+          }}
+        >
+          <span aria-hidden="true">◌</span>
+          <span className="flex-1">{activeModel.requires_application.note}</span>
+          <a
+            href={activeModel.requires_application.application_url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="text-ink hover:underline"
+          >
+            apply →
+          </a>
+        </div>
+      )}
       {(apiKeyMissing || errorBanner) && (
         <div
           className="px-6 py-2 text-sm border-b border-paper-edge bg-amber-50/60 text-amber-900"
