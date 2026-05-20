@@ -124,6 +124,10 @@ function App() {
   // visible even when not the active one. Loaded on mount + refreshed
   // when the active model's state mutates (via reflect).
   const [modelStates, setModelStates] = useState<Record<string, ModelState>>({});
+  // Per-model identity — primarily for chosen_name (the model's
+  // self-authored name). Roster shows it when set. Loaded alongside
+  // states; refreshed when reflect sets/clears chosen_name.
+  const [modelIdentities, setModelIdentities] = useState<Record<string, Identity | null>>({});
 
   const [state, setState] = useState<ModelState>(FALLBACK_STATE);
   const [conversations, setConversations] =
@@ -189,10 +193,11 @@ function App() {
     if (!inTauri) return;
     (async () => {
       try {
-        const [prefs, key, allStates] = await Promise.all([
+        const [prefs, key, allStates, allIdentities] = await Promise.all([
           readPreferences(),
           readApiKey(),
           Promise.all(MODELS.map(async (m) => [m.id, await readState(m.id)] as const)),
+          Promise.all(MODELS.map(async (m) => [m.id, await readIdentity(m.id)] as const)),
         ]);
         setPreferences(prefs);
         applyPreferences(prefs);
@@ -206,6 +211,11 @@ function App() {
           statesMap[id] = toUIState(ps);
         }
         setModelStates(statesMap);
+        const identitiesMap: Record<string, Identity | null> = {};
+        for (const [id, ident] of allIdentities) {
+          identitiesMap[id] = ident;
+        }
+        setModelIdentities(identitiesMap);
 
         // Pick active model from preferences, falling back to the
         // default if the saved id isn't in the registry anymore.
@@ -242,6 +252,7 @@ function App() {
         setConversations(convs);
         setStandingBoundaries(standing);
         setIdentity(ident);
+        setModelIdentities((prev) => ({ ...prev, [activeModelId]: ident }));
         setConversationBoundaries([]);
         setPendingQuestionId(null);
         pendingResolver.current = null;
@@ -479,6 +490,13 @@ function App() {
           if (execution.newConversationBoundaries) {
             setConversationBoundaries(execution.newConversationBoundaries);
           }
+          if (execution.newIdentity) {
+            setIdentity(execution.newIdentity);
+            setModelIdentities((prev) => ({
+              ...prev,
+              [activeModelId]: execution.newIdentity!,
+            }));
+          }
 
           let resultStr: string;
           if (execution.awaitsHumanAnswer) {
@@ -569,6 +587,7 @@ function App() {
           try {
             const newIdentity = await readIdentity(activeModelId);
             setIdentity(newIdentity);
+            setModelIdentities((prev) => ({ ...prev, [activeModelId]: newIdentity }));
           } catch (err) {
             console.error("Failed to refresh identity after end:", err);
           }
@@ -796,6 +815,7 @@ function App() {
           models={MODELS}
           activeModelId={activeModelId}
           modelStates={modelStates}
+          modelIdentities={modelIdentities}
           onSelect={handleSelectModel}
           disabled={isGenerating}
         />
@@ -817,6 +837,7 @@ function App() {
             <ModelSurface
               state={state}
               modelId={activeModel.display_name}
+              chosenName={identity?.chosen_name ?? null}
               standingBoundaries={standingBoundaries}
               conversationBoundaries={conversationBoundaries}
             />

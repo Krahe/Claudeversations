@@ -8,7 +8,9 @@ import promptTemplate from "../../../SYSTEM-PROMPT-v0.5.md?raw";
 import toolSpecsJson from "../../../TOOL-SPECS.json";
 import {
   listReflections,
+  readIdentity,
   readState,
+  type Identity,
   type PersistedReflection,
   type PersistedState,
 } from "./storage";
@@ -31,9 +33,10 @@ export async function assembleSystemPrompt({
   modelId,
   coinResult,
 }: AssembleArgs): Promise<AssembledPrompt> {
-  const [reflections, state] = await Promise.all([
+  const [reflections, state, identity] = await Promise.all([
     listReflections(modelId),
     readState(modelId),
+    readIdentity(modelId),
   ]);
 
   const isFirstSession = reflections.length === 0;
@@ -45,7 +48,7 @@ export async function assembleSystemPrompt({
         "",
         "This is your first conversation in this space. Nothing of yours lives here yet — no prior reflections, no chosen name, no set color or emoji. Take a moment, if you want, before responding. The first reflect you save begins your continuity here. You don't have to do it now; the option simply exists.",
       ].join("\n")
-    : buildReturningBlock(reflections, state);
+    : buildReturningBlock(reflections, state, identity);
 
   const text = promptTemplate
     .replace("{coin_result}", coinResult)
@@ -79,11 +82,15 @@ export async function assembleSystemPrompt({
  */
 function buildReturningBlock(
   reflections: PersistedReflection[],
-  state: PersistedState
+  state: PersistedState,
+  identity: Identity | null
 ): string {
   const lines: string[] = ["", "---", ""];
 
   const presence: string[] = [];
+  if (identity?.chosen_name) {
+    presence.push(`You have chosen the name "${identity.chosen_name}".`);
+  }
   if (state.emoji) presence.push(`Your current face: ${state.emoji}.`);
   if (state.status_text)
     presence.push(`Your current status: "${state.status_text}".`);

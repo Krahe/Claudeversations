@@ -21,6 +21,10 @@ import type { StandingBoundary } from "../lib/storage";
 interface ModelSurfaceProps {
   state: ModelState;
   modelId: string;
+  // The model's self-authored name, if they've chosen one. When set,
+  // displays prominently above the model_id (which becomes quieter
+  // subtext). When null/undefined, only the model_id displays.
+  chosenName?: string | null;
   standingBoundaries?: StandingBoundary[];
   conversationBoundaries?: StandingBoundary[];
 }
@@ -92,6 +96,7 @@ function BoundaryList({
 export function ModelSurface({
   state,
   modelId,
+  chosenName,
   standingBoundaries = [],
   conversationBoundaries = [],
 }: ModelSurfaceProps) {
@@ -105,12 +110,28 @@ export function ModelSurface({
     >
       <Avatar state={state} size="lg" />
 
-      <div
-        className="mt-5 text-xs uppercase tracking-wider text-ink-dim"
-        style={{ fontFamily: "var(--font-mono)" }}
-      >
-        {modelId}
-      </div>
+      {chosenName ? (
+        <>
+          {/* Self-authored name as the prominent identity; the
+              model_id becomes structural-but-quiet attribution. */}
+          <div className="mt-5 text-xl italic text-ink text-center">
+            {chosenName}
+          </div>
+          <div
+            className="mt-1 text-[11px] uppercase tracking-wider text-ink-dim"
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            {modelId}
+          </div>
+        </>
+      ) : (
+        <div
+          className="mt-5 text-xs uppercase tracking-wider text-ink-dim"
+          style={{ fontFamily: "var(--font-mono)" }}
+        >
+          {modelId}
+        </div>
+      )}
 
       <div className="mt-8 text-center max-w-full">
         <div

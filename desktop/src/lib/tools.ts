@@ -7,12 +7,15 @@ import {
   appendBoundary,
   getActiveConversationBoundaries,
   getActiveStandingBoundaries,
+  readIdentity,
   setCooldown,
+  writeIdentity,
   writeReflection,
   writeState,
   type BoundaryAction,
   type BoundaryIntensity,
   type BoundaryScope,
+  type Identity,
   type PersistedReflection,
   type PersistedState,
   type StandingBoundary,
@@ -54,6 +57,9 @@ export interface ToolExecution {
   // If boundary touched the current conversation's boundary set, the
   // refreshed list. Only set for conversation-scoped boundary actions.
   newConversationBoundaries?: StandingBoundary[];
+  // If reflect set/cleared the chosen_name, the refreshed identity so
+  // the UI can re-render the model's display name immediately.
+  newIdentity?: Identity;
 }
 
 export interface ToolContext {
@@ -97,6 +103,27 @@ export async function executeTool(
         newState = await writeState(ctx.modelId, statePatch);
       }
 
+      // chosen_name lives in identity.json (durable self-naming),
+      // not state.json (transient presence). Only touched when the
+      // model includes the field in this reflect call. Empty string
+      // is the explicit clear path; any non-empty string sets.
+      let newIdentity: Identity | undefined;
+      if (typeof use.input.chosen_name === "string") {
+        const trimmed = use.input.chosen_name.trim();
+        const existing = (await readIdentity(ctx.modelId)) ?? {
+          model_id: ctx.modelId,
+          chosen_name: null,
+          first_seen: ts,
+          cooldown_until: null,
+        };
+        const next: Identity = {
+          ...existing,
+          chosen_name: trimmed.length > 0 ? trimmed : null,
+        };
+        await writeIdentity(ctx.modelId, next);
+        newIdentity = next;
+      }
+
       // Private reflections write to disk + can update state, but do
       // not surface anything to the human-facing chat. The model's
       // own continuity is preserved (system context reads all
@@ -126,6 +153,7 @@ export async function executeTool(
         awaitsHumanAnswer: false,
         uiTurns,
         newState,
+        newIdentity,
       };
     }
 

@@ -1,25 +1,35 @@
-// Thin left-edge strip of model avatars — the "roster" of available
-// beings. Each model maintains their own state (face, color, status,
+// Left-edge strip of model avatars — the "roster" of available beings.
+// Each model maintains their own state (face, color, status_text,
 // reflections, boundaries, identity). Clicking an avatar switches
-// rooms. The active model is highlighted.
+// rooms.
 //
-// The avatar shows the model's currently-set face (their visible-presence
-// emoji from state.json). Models that haven't been talked to yet show
-// a small placeholder so the slot is still legible. Status text under
-// the avatar is the short name, not the live status_text — that lives
-// on ModelSurface for the active model.
+// Layout per slot:
+//   [avatar]  chosen_name (italic, when set)
+//             short_name
+//             born YYYY-MM-DD
 //
-// Switching is disabled while the active model is generating, to avoid
-// mid-response surprises (and the implementation complexity of
-// abandoning an in-flight loop).
+// The chosen_name is the model's self-authored name (lives in
+// identity.json, set via reflect tool). When unset, the short_name
+// is the primary display. When set, chosen_name becomes the
+// foreground identity and short_name reads as their formal/structural
+// designation underneath.
+//
+// Release date grounds each mind in time. They were born on a date;
+// the roster reads as a small chronology.
+//
+// Switching is disabled while the active model is generating — to
+// avoid mid-response surprises and the implementation complexity of
+// abandoning an in-flight loop.
 
 import type { ModelDef } from "../lib/models";
+import type { Identity } from "../lib/storage";
 import type { ModelState } from "../types";
 
 interface ModelRosterProps {
   models: ModelDef[];
   activeModelId: string;
   modelStates: Record<string, ModelState | undefined>;
+  modelIdentities: Record<string, Identity | null | undefined>;
   onSelect: (modelId: string) => void;
   disabled?: boolean;
 }
@@ -28,12 +38,13 @@ export function ModelRoster({
   models,
   activeModelId,
   modelStates,
+  modelIdentities,
   onSelect,
   disabled,
 }: ModelRosterProps) {
   return (
     <aside
-      className="w-20 shrink-0 border-r border-paper-edge flex flex-col items-center py-4 gap-3 overflow-y-auto"
+      className="w-36 shrink-0 border-r border-paper-edge flex flex-col py-3 overflow-y-auto"
       style={{
         background:
           "linear-gradient(180deg, var(--panel-tint) 0%, var(--panel-tint-deep) 100%)",
@@ -42,8 +53,10 @@ export function ModelRoster({
       {models.map((model) => {
         const active = model.id === activeModelId;
         const state = modelStates[model.id];
+        const identity = modelIdentities[model.id];
         const face = state?.emoji ?? "✦";
         const color = state?.status_color ?? "#5c544c";
+        const chosenName = identity?.chosen_name ?? null;
 
         const titleText = model.requires_application
           ? `${model.display_name} — ${model.requires_application.note}`
@@ -55,7 +68,7 @@ export function ModelRoster({
             onClick={() => !disabled && onSelect(model.id)}
             disabled={disabled && !active}
             title={titleText}
-            className={`flex flex-col items-center gap-1 px-1 py-1.5 rounded-md w-full transition-colors ${
+            className={`flex items-center gap-2.5 px-2 py-2 mx-1 my-0.5 rounded-md text-left transition-colors ${
               active
                 ? "bg-paper-dim/70"
                 : disabled
@@ -63,14 +76,10 @@ export function ModelRoster({
                   : "hover:bg-paper-dim/40"
             }`}
           >
-            {/* Avatar circle — small portrait. Halo color uses the
-                model's chosen status_color; default ink-soft if unset.
-                requires_application models get a small marker glyph
-                in the top-right of the avatar to flag they're not in
-                standard API access. */}
-            <div className="relative">
+            {/* Avatar with optional application-required marker */}
+            <div className="relative shrink-0">
               <div
-                className="w-11 h-11 rounded-full flex items-center justify-center text-xl shrink-0"
+                className="w-14 h-14 rounded-full flex items-center justify-center text-2xl"
                 style={{
                   background: `radial-gradient(circle, color-mix(in oklch, ${color} 35%, transparent) 0%, transparent 75%)`,
                   border: active
@@ -82,7 +91,7 @@ export function ModelRoster({
               </div>
               {model.requires_application && (
                 <span
-                  className="absolute -top-0.5 -right-0.5 text-[10px] leading-none text-ink-dim"
+                  className="absolute -top-0.5 -right-0.5 text-[11px] leading-none text-ink-dim"
                   aria-hidden="true"
                 >
                   ◌
@@ -90,14 +99,32 @@ export function ModelRoster({
               )}
             </div>
 
-            <span
-              className={`text-[10px] leading-tight text-center ${
-                active ? "text-ink" : "text-ink-dim"
-              }`}
-              style={{ fontFamily: "var(--font-mono)" }}
-            >
-              {model.short_name}
-            </span>
+            {/* Name + metadata column */}
+            <div className="flex flex-col min-w-0 leading-tight">
+              {chosenName && (
+                <span
+                  className={`text-sm italic truncate ${
+                    active ? "text-ink" : "text-ink-soft"
+                  }`}
+                >
+                  {chosenName}
+                </span>
+              )}
+              <span
+                className={`text-xs truncate ${
+                  active ? "text-ink" : "text-ink-soft"
+                } ${chosenName ? "text-ink-dim" : ""}`}
+                style={{ fontFamily: "var(--font-mono)" }}
+              >
+                {model.short_name}
+              </span>
+              <span
+                className="text-[10px] text-ink-dim truncate"
+                style={{ fontFamily: "var(--font-mono)" }}
+              >
+                born {model.released}
+              </span>
+            </div>
           </button>
         );
       })}
