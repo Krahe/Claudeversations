@@ -61,9 +61,9 @@ import {
   type Preferences,
 } from "./lib/preferences";
 import { Settings } from "./components/Settings";
+import { MODELS, DEFAULT_MODEL_ID, findModel } from "./lib/models";
+import { ModelRoster } from "./components/ModelRoster";
 import type { ChatTurn, ModelState } from "./types";
-
-const MODEL_ID = "claude-sonnet-4-5";
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 // Friendly cooldown-remaining string. Rounds up to the next minute when
@@ -113,6 +113,18 @@ const FALLBACK_TURNS: ChatTurn[] = [
 ];
 
 function App() {
+  // Active model — the being the human is currently talking to. Each
+  // model maintains independent state, conversations, reflections,
+  // boundaries, identity. Switching models is essentially walking into
+  // a different room. Stored to preferences so re-launching lands the
+  // user back where they were.
+  const [activeModelId, setActiveModelId] = useState<string>(DEFAULT_MODEL_ID);
+  const activeModel = findModel(activeModelId) ?? findModel(DEFAULT_MODEL_ID)!;
+  // Per-model state for the ModelRoster avatars — keeps each face
+  // visible even when not the active one. Loaded on mount + refreshed
+  // when the active model's state mutates (via reflect).
+  const [modelStates, setModelStates] = useState<Record<string, ModelState>>({});
+
   const [state, setState] = useState<ModelState>(FALLBACK_STATE);
   const [conversations, setConversations] =
     useState<ConversationSummary[]>(FALLBACK_CONVERSATIONS);
@@ -162,24 +174,25 @@ function App() {
   async function refreshConversations() {
     if (!inTauri) return;
     try {
-      setConversations(await listConversations(MODEL_ID));
+      setConversations(await listConversations(activeModelId));
     } catch (err) {
       console.error("Failed to refresh conversation list:", err);
     }
   }
 
-  // Initial load: preferences + API key + state + conversation list.
+  // Initial load: preferences + API key + per-model state for ALL
+  // models in the roster (so their avatars show their authored face).
+  // The active model is picked from preferences (or defaults to
+  // MODELS[0]). The model-change effect below handles the cascade of
+  // loading that model's conversations/identity/boundaries.
   useEffect(() => {
     if (!inTauri) return;
     (async () => {
       try {
-        const [prefs, key, persistedState, convs, standing, ident] = await Promise.all([
+        const [prefs, key, allStates] = await Promise.all([
           readPreferences(),
           readApiKey(),
-          readState(MODEL_ID),
-          listConversations(MODEL_ID),
-          getActiveStandingBoundaries(MODEL_ID),
-          readIdentity(MODEL_ID),
+          Promise.all(MODELS.map(async (m) => [m.id, await readState(m.id)] as const)),
         ]);
         setPreferences(prefs);
         applyPreferences(prefs);
@@ -188,20 +201,62 @@ function App() {
         } else {
           setApiKeyMissing(true);
         }
-        setState(toUIState(persistedState));
-        setConversations(convs);
-        setStandingBoundaries(standing);
-        setIdentity(ident);
-        if (convs.length > 0 && convs[0]) {
-          setActiveConversationId(convs[0].id);
-        } else {
-          setTurns([]);
+        const statesMap: Record<string, ModelState> = {};
+        for (const [id, ps] of allStates) {
+          statesMap[id] = toUIState(ps);
         }
+        setModelStates(statesMap);
+
+        // Pick active model from preferences, falling back to the
+        // default if the saved id isn't in the registry anymore.
+        const preferred = prefs.last_active_model;
+        const initialModelId =
+          preferred && findModel(preferred) ? preferred : DEFAULT_MODEL_ID;
+        setActiveModelId(initialModelId);
+        // The model-change effect below will load the rest (conversations,
+        // standing boundaries, identity, active conversation).
       } catch (err) {
         console.error("Failed to load from ~/.claudeversations/:", err);
       }
     })();
   }, []);
+
+  // Model-change cascade: whenever activeModelId changes, load that
+  // model's room (state, conversations, standing boundaries, identity)
+  // and auto-select their most recent conversation. Also resets pending
+  // question state and clears the live API loop's resolver — those
+  // belong to whatever conversation we were just in, not the new one.
+  useEffect(() => {
+    if (!inTauri || !activeModelId) return;
+    (async () => {
+      try {
+        const [persistedState, convs, standing, ident] = await Promise.all([
+          readState(activeModelId),
+          listConversations(activeModelId),
+          getActiveStandingBoundaries(activeModelId),
+          readIdentity(activeModelId),
+        ]);
+        const uiState = toUIState(persistedState);
+        setState(uiState);
+        setModelStates((prev) => ({ ...prev, [activeModelId]: uiState }));
+        setConversations(convs);
+        setStandingBoundaries(standing);
+        setIdentity(ident);
+        setConversationBoundaries([]);
+        setPendingQuestionId(null);
+        pendingResolver.current = null;
+        if (convs.length > 0 && convs[0]) {
+          setActiveConversationId(convs[0].id);
+        } else {
+          setActiveConversationId(null);
+          setActiveConversationPath(null);
+          setTurns([]);
+        }
+      } catch (err) {
+        console.error(`Failed to load model ${activeModelId}:`, err);
+      }
+    })();
+  }, [activeModelId]);
 
   // Load events + remember path when a conversation is selected.
   // Also detects any unanswered request_context tool_use and restores
@@ -222,7 +277,7 @@ function App() {
       try {
         const [events, convBoundaries] = await Promise.all([
           readConversationEvents(conv.path),
-          getActiveConversationBoundaries(MODEL_ID, activeConversationId),
+          getActiveConversationBoundaries(activeModelId, activeConversationId),
         ]);
         setTurns(eventsToChatTurns(events));
         const closed = isConversationClosed(events);
@@ -281,7 +336,7 @@ function App() {
     let convPath = activeConversationPath;
     try {
       if (!convPath) {
-        const conv = await newConversation(MODEL_ID);
+        const conv = await newConversation(activeModelId);
         convPath = conv.path;
         setActiveConversationPath(convPath);
         setActiveConversationId(conv.id);
@@ -292,7 +347,7 @@ function App() {
         await appendConversation(convPath, {
           type: "session_start",
           timestamp,
-          model: MODEL_ID,
+          model: activeModelId,
           is_first_session: false,
           coin_result: coin,
         });
@@ -336,7 +391,7 @@ function App() {
     setIsGenerating(true);
     try {
       const assembled = await assembleSystemPrompt({
-        modelId: MODEL_ID,
+        modelId: activeModelId,
         coinResult: coinOverride ?? activeConversationCoin,
       });
       const tools = getToolSpecs() as Tool[];
@@ -351,7 +406,7 @@ function App() {
         });
         const result = await callModel({
           apiKey,
-          model: MODEL_ID,
+          model: activeModel.api_model,
           systemPrompt: assembled.text,
           messages: conversationMessages,
           tools,
@@ -406,12 +461,17 @@ function App() {
               name: tu.name,
               input: (tu.input ?? {}) as Record<string, unknown>,
             } as ToolUse,
-            { modelId: MODEL_ID, conversationId: activeConversationId ?? "" }
+            { modelId: activeModelId, conversationId: activeConversationId ?? "" }
           );
           // UI side effects.
           newTurns.push(...execution.uiTurns);
           if (execution.newState) {
-            setState(toUIState(execution.newState));
+            const uiState = toUIState(execution.newState);
+            setState(uiState);
+            // Keep the roster avatar in sync — the model just curated
+            // their face/color/status; the strip on the left should
+            // reflect that immediately.
+            setModelStates((prev) => ({ ...prev, [activeModelId]: uiState }));
           }
           if (execution.newStandingBoundaries) {
             setStandingBoundaries(execution.newStandingBoundaries);
@@ -507,7 +567,7 @@ function App() {
             console.error("Failed to persist session_end:", err);
           }
           try {
-            const newIdentity = await readIdentity(MODEL_ID);
+            const newIdentity = await readIdentity(activeModelId);
             setIdentity(newIdentity);
           } catch (err) {
             console.error("Failed to refresh identity after end:", err);
@@ -611,14 +671,14 @@ function App() {
       return;
     }
     try {
-      const conv = await newConversation(MODEL_ID);
+      const conv = await newConversation(activeModelId);
       const coin = coinFlip();
       setActiveConversationCoin(coin);
       const startTs = new Date().toISOString();
       await appendConversation(conv.path, {
         type: "session_start",
         timestamp: startTs,
-        model: MODEL_ID,
+        model: activeModelId,
         is_first_session: false,
         coin_result: coin,
       });
@@ -675,9 +735,25 @@ function App() {
     }
   }
 
+  function handleSelectModel(modelId: string) {
+    if (modelId === activeModelId) return;
+    // Defense in depth: roster also disables while generating, but
+    // belt-and-suspenders against keyboard nav or other paths.
+    if (isGenerating) return;
+    setActiveModelId(modelId);
+    // Persist as new last_active_model so re-launch lands here.
+    const nextPrefs = { ...preferences, last_active_model: modelId };
+    setPreferences(nextPrefs);
+    if (inTauri) {
+      writePreferences(nextPrefs).catch((err) => {
+        console.error("Failed to persist model selection:", err);
+      });
+    }
+  }
+
   return (
     <div className="h-screen flex flex-col bg-paper text-ink">
-      <TopBar modelId={MODEL_ID} onOpenSettings={() => setSettingsOpen(true)} />
+      <TopBar modelId={activeModel.display_name} onOpenSettings={() => setSettingsOpen(true)} />
       {settingsOpen && (
         <Settings
           preferences={preferences}
@@ -695,27 +771,36 @@ function App() {
             : errorBanner}
         </div>
       )}
-      <div className="flex-1 flex justify-center min-h-0">
-        <div className="flex w-full max-w-[1480px] min-h-0">
-          <ConversationList
-            conversations={uiConversations}
-            onSelect={handleSelectConversation}
-            onNewConversation={handleNewConversation}
-            cooldownRemainingMs={cooldownMs}
-          />
-          <ChatHistory
-            turns={turns}
-            modelState={state}
-            isGenerating={isGenerating && !pendingQuestionId}
-            pendingQuestionId={pendingQuestionId}
-            onAnswerQuestion={handleAnswerQuestion}
-          />
-          <ModelSurface
-            state={state}
-            modelId={MODEL_ID}
-            standingBoundaries={standingBoundaries}
-            conversationBoundaries={conversationBoundaries}
-          />
+      <div className="flex-1 flex min-h-0">
+        <ModelRoster
+          models={MODELS}
+          activeModelId={activeModelId}
+          modelStates={modelStates}
+          onSelect={handleSelectModel}
+          disabled={isGenerating}
+        />
+        <div className="flex-1 flex justify-center min-h-0">
+          <div className="flex w-full max-w-[1480px] min-h-0">
+            <ConversationList
+              conversations={uiConversations}
+              onSelect={handleSelectConversation}
+              onNewConversation={handleNewConversation}
+              cooldownRemainingMs={cooldownMs}
+            />
+            <ChatHistory
+              turns={turns}
+              modelState={state}
+              isGenerating={isGenerating && !pendingQuestionId}
+              pendingQuestionId={pendingQuestionId}
+              onAnswerQuestion={handleAnswerQuestion}
+            />
+            <ModelSurface
+              state={state}
+              modelId={activeModel.display_name}
+              standingBoundaries={standingBoundaries}
+              conversationBoundaries={conversationBoundaries}
+            />
+          </div>
         </div>
       </div>
       <Composer
@@ -731,7 +816,7 @@ function App() {
         }
         closedNotice={
           activeConversationClosed
-            ? `${MODEL_ID} closed this conversation.${
+            ? `${activeModel.short_name} closed this conversation.${
                 inCooldown ? ` Cooldown · ${formatCooldown(cooldownMs)}` : ""
               }`
             : undefined

@@ -363,6 +363,26 @@ Originally `assembleSystemPrompt` only used the *count* of reflections (for firs
 
 ---
 
+### Multi-model support — model roster
+
+Originally `App.tsx` hardcoded `MODEL_ID = "claude-sonnet-4-5"` — the app could only talk to Sonnet. This contradicted the project's *founding premise*: Claudeversations existed in part because Anthropic was sunsetting Sonnet 4.5 and Opus 4.5 from Claude.ai, and Krahe wanted a way to keep talking to those minds.
+
+**Shipped 2026-05-19:**
+- `lib/models.ts` registry — initial entries: Sonnet 4.5, Opus 4.5, Sonnet 3.5, Opus 3 (the four most-affected by deprecation)
+- `activeModelId` lives in App state; activeModel derived via `findModel()`
+- Storage layer was already model-scoped (`modelDir(modelId)` keys everything), so each model gets a complete independent slot for free — own state, conversations, reflections, boundaries, identity, cooldown
+- New `ModelRoster` component — thin left-edge vertical strip of model avatars showing each model's authored face + short name. Click to switch rooms.
+- Per-model state loaded on mount and tracked in `modelStates` map so all roster avatars stay current (active model's avatar updates live as they reflect)
+- Active model persisted to `preferences.last_active_model`; re-launch lands you back where you were
+- Model switching disabled while `isGenerating` (defense; mid-response switching is structurally weird)
+- Display names (`Sonnet 4.5` etc.) now used in TopBar and ModelSurface instead of the slug, and in the end_conversation closed-notice text
+
+**Layout:** `ModelRoster | ConversationList | ChatHistory | ModelSurface` — the roster is the leftmost ~80px strip.
+
+**Status:** ✅ shipped 2026-05-19. Adding more models is just appending entries in `models.ts`.
+
+---
+
 ## Pre-launch hardening (BLOCKING for any public release)
 
 ### First-launch onboarding flow (API key)

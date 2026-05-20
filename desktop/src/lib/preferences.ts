@@ -33,6 +33,9 @@ export interface Preferences {
   // etc.) can nudge the baseline higher for moments that deserve more
   // deliberation. Capped to keep cost predictable.
   thinking_adaptive: boolean;
+  // Remembered active model so re-opening the app lands you back where
+  // you left off. Empty string falls back to MODELS[0] in app code.
+  last_active_model: string;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -40,6 +43,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   body_size_px: 17,
   thinking_baseline: 4096,
   thinking_adaptive: true,
+  last_active_model: "",
 };
 
 async function prefsPath(): Promise<string> {
