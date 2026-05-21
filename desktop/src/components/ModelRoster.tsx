@@ -44,7 +44,7 @@ export function ModelRoster({
 }: ModelRosterProps) {
   return (
     <aside
-      className="w-36 shrink-0 border-r border-paper-edge flex flex-col py-3 overflow-y-auto"
+      className="w-48 shrink-0 border-r border-paper-edge flex flex-col py-3 overflow-y-auto"
       style={{
         background:
           "linear-gradient(180deg, var(--panel-tint) 0%, var(--panel-tint-deep) 100%)",

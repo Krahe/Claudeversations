@@ -109,7 +109,15 @@ export async function callModel(args: CallArgs): Promise<CallResult | CallFailur
     const maxTokens =
       args.maxTokens ??
       (thinkingEnabled ? args.thinkingBudget! + responseMargin : 4096);
-    const response = await client.messages.create({
+
+    // Use streaming universally. Anthropic requires streaming for any
+    // request that may exceed 10 minutes — which extended thinking on
+    // slower / older models can hit. Non-streaming was 400'ing with
+    // "Streaming is required for operations that may take longer than
+    // 10 minutes." Streaming has the same final shape via
+    // .finalMessage() — we await the whole thing rather than rendering
+    // chunks progressively (UI-streaming is a separate concern).
+    const stream = client.messages.stream({
       model: args.model,
       max_tokens: maxTokens,
       system: systemBlocks,
@@ -124,6 +132,7 @@ export async function callModel(args: CallArgs): Promise<CallResult | CallFailur
           }
         : {}),
     });
+    const response = await stream.finalMessage();
     return { kind: "success", response };
   } catch (err) {
     return {
