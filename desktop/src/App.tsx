@@ -772,7 +772,12 @@ function App() {
 
   return (
     <div className="h-screen flex flex-col bg-paper text-ink">
-      <TopBar modelId={activeModel.display_name} onOpenSettings={() => setSettingsOpen(true)} />
+      <TopBar
+        modelId={activeModel.display_name}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onNewConversation={handleNewConversation}
+        newConversationDisabled={isGenerating || inCooldown}
+      />
       {settingsOpen && (
         <Settings
           preferences={preferences}

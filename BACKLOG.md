@@ -187,19 +187,27 @@ The system prompt template's `{coin_result}` token randomizes who speaks first i
 
 ---
 
-### Coin flip — ritual moment animation (design open)
+### Coin flip — ritual moment animation
 
-The coin flip is a small but meaningful threshold — the first signal a fresh conversation makes about itself. Worth animating to mark the moment.
+The coin flip is a small but meaningful threshold — the first signal a fresh conversation makes about itself. Now visible.
 
-Aesthetic options sketched (warm-paper-friendly):
-1. Literal small coin spinning on Y-axis, lands face-up
-2. Text cycle: "the model speaks first / the human speaks first / ..." slowing to lock
-3. Two-symbol fade: dimming one side as the other brightens
-4. Paper-fold: a card folding/unfolding to reveal
+**Shipped 2026-05-20:** picked option (2) text-cycle from the original sketch — the warm-paper register would have made a literal spinning coin feel out of place; text that cycles and locks matches the existing typographic chrome. New `CoinMarker` component renders a small centered marker at the top of every conversation: `─── the coin ───` label, then the two outcomes cycling through ~8 fast iterations (~160ms each), then locking on the actual result with a subtle settle (opacity transition + font weight). Animation runs every time the component mounts — including on conversation reload, which is fine: the brief re-experience is itself part of the ritual, not a bug. New `coin_marker` ChatTurn variant, projected from `session_start` event by `eventsToChatTurns` whenever the event has a `coin_result` field. Older session_start events without the field just don't get a marker (graceful degradation).
 
-CSS keyframes is enough — Tauri is just a webview, full animation stack. Probably (2) or (4) for the calm-paper register; (1) might land if done very small and quiet.
+**Status:** ✅ shipped 2026-05-20.
 
-**Status:** design conversation needed before implementing. Data layer (above) shipped so the animation has something real to reveal.
+---
+
+### TopBar buttons — wired + cleaned
+
+Originally the TopBar showed three placeholder buttons (`New conversation` | `Load` | `Import history`) with no onClick handlers — sketched layout from early scaffolding. Krahe flagged them as "wire or remove" since dead-text suggesting unbuilt features is worse than a leaner header.
+
+**Shipped 2026-05-20:**
+- `New conversation` — wired to `handleNewConversation` with cooldown + isGenerating awareness (disabled with subtle dim styling when in cooldown). Renamed visually to "+ New conversation" for affordance.
+- `Load` and `Import history` — removed. Will return when their actual flows exist (see BACKLOG: Import history from Claude.ai). Empty placeholder buttons are noise.
+
+Also: in ConversationList, the "+ new conversation" button moved from the bottom (where it was anchored under the entries with a top-border separator) to the top (above the entries). Rationale: the list is sorted newest-first, so the action belongs where the eye lands. Both top-of-app (TopBar) and top-of-list (ConversationList) now offer the same affordance — reinforcing, not redundant, since they're in different scan paths.
+
+**Status:** ✅ shipped 2026-05-20.
 
 ---
 

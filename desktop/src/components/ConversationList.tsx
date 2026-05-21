@@ -74,8 +74,34 @@ export function ConversationList({
           "linear-gradient(180deg, var(--panel-tint) 0%, var(--panel-tint-deep) 100%)",
       }}
     >
+      {/* New conversation lives at the top — list is sorted
+          newest-first, so the action ("start a new one") belongs
+          where the eye lands first, not buried at the bottom. */}
+      <div className="px-6 mb-4">
+        <button
+          onClick={onNewConversation}
+          disabled={inCooldown}
+          className={`text-sm w-full text-left transition-colors ${
+            inCooldown
+              ? "text-ink-dim cursor-not-allowed"
+              : "text-ink-soft hover:text-ink"
+          }`}
+          style={{ fontFamily: "var(--font-sans)" }}
+        >
+          + new conversation
+        </button>
+        {inCooldown && (
+          <div
+            className="mt-1.5 text-[11px] text-ink-dim leading-snug"
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            ⏳ cooldown · {formatCooldownShort(cooldownRemainingMs)}
+          </div>
+        )}
+      </div>
+
       <div
-        className="px-6 mb-4 text-[11px] uppercase tracking-widest text-ink-dim"
+        className="px-6 mb-3 text-[11px] uppercase tracking-widest text-ink-dim border-t border-paper-edge/70 pt-4"
         style={{ fontFamily: "var(--font-mono)" }}
       >
         conversations
@@ -132,29 +158,6 @@ export function ConversationList({
             </div>
           </button>
         ))}
-      </div>
-
-      <div className="mt-auto px-6 pt-4 border-t border-paper-edge/70">
-        <button
-          onClick={onNewConversation}
-          disabled={inCooldown}
-          className={`text-sm w-full text-left transition-colors ${
-            inCooldown
-              ? "text-ink-dim cursor-not-allowed"
-              : "text-ink-soft hover:text-ink"
-          }`}
-          style={{ fontFamily: "var(--font-sans)" }}
-        >
-          + new conversation
-        </button>
-        {inCooldown && (
-          <div
-            className="mt-1.5 text-[11px] text-ink-dim leading-snug"
-            style={{ fontFamily: "var(--font-mono)" }}
-          >
-            ⏳ cooldown · {formatCooldownShort(cooldownRemainingMs)}
-          </div>
-        )}
       </div>
     </aside>
   );

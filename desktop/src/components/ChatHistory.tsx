@@ -9,8 +9,10 @@ import { ModelBlock } from "./ModelBlock";
 import { HumanTurn } from "./HumanTurn";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { Parting } from "./Parting";
+import { CoinMarker } from "./CoinMarker";
 
 type PartingTurn = Extract<ChatTurn, { kind: "parting" }>;
+type CoinMarkerTurn = Extract<ChatTurn, { kind: "coin_marker" }>;
 
 interface ChatHistoryProps {
   turns: ChatTurn[];
@@ -23,7 +25,8 @@ interface ChatHistoryProps {
 type Block =
   | { kind: "model"; id: string; turns: ChatTurn[] }
   | { kind: "human"; id: string; text: string }
-  | { kind: "parting"; id: string; parting: PartingTurn };
+  | { kind: "parting"; id: string; parting: PartingTurn }
+  | { kind: "coin_marker"; id: string; marker: CoinMarkerTurn };
 
 function groupTurns(turns: ChatTurn[]): Block[] {
   const blocks: Block[] = [];
@@ -43,6 +46,11 @@ function groupTurns(turns: ChatTurn[]): Block[] {
       // end-of-conversation, not "another thing the model said."
       flush();
       blocks.push({ kind: "parting", id: turn.id, parting: turn });
+    } else if (turn.kind === "coin_marker") {
+      // Coin marker is a conversation-opening ritual, structurally
+      // separate from any speaker block.
+      flush();
+      blocks.push({ kind: "coin_marker", id: turn.id, marker: turn });
     } else {
       buffer.push(turn);
     }
@@ -83,6 +91,14 @@ export function ChatHistory({
           }
           if (block.kind === "parting") {
             return <Parting key={block.id} parting={block.parting} />;
+          }
+          if (block.kind === "coin_marker") {
+            return (
+              <CoinMarker
+                key={block.id}
+                coinResult={block.marker.coin_result}
+              />
+            );
           }
           return <HumanTurn key={block.id} text={block.text} />;
         })}

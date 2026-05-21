@@ -59,4 +59,10 @@ export type ChatTurn =
       cooldown_minutes: number;
       cooldown_until: string; // ISO; when new conversations can start again
       timestamp: string;
+    }
+  | {
+      kind: "coin_marker";
+      id: string;
+      coin_result: "you speak first" | "the human speaks first";
+      timestamp: string;
     };

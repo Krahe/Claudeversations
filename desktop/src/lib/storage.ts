@@ -513,7 +513,21 @@ export function eventsToChatTurns(events: JsonlEvent[]): ChatTurn[] {
   const nextId = () => `e-${counter++}`;
 
   for (const e of events) {
-    if (e.type === "human_message") {
+    if (e.type === "session_start") {
+      // Render the coin flip as a small marker at the conversation's
+      // top. Only present for conversations created after coin
+      // persistence shipped (older session_start events lack the
+      // field — those just don't get a marker).
+      const coin = (e as { coin_result?: unknown }).coin_result;
+      if (coin === "you speak first" || coin === "the human speaks first") {
+        turns.push({
+          kind: "coin_marker",
+          id: `coin-${e.timestamp}`,
+          coin_result: coin,
+          timestamp: e.timestamp,
+        });
+      }
+    } else if (e.type === "human_message") {
       turns.push({
         kind: "human",
         id: nextId(),
